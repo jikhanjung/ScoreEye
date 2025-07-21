@@ -1,0 +1,159 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# OpenCV temporary files
+*.jpg.tmp
+*.png.tmp
+
+# ScoreEye specific files
+# Test images and outputs (keep sample files in images/ and output/)
+test_images/
+temp_output/
+debug_images/
+
+# Large PDF files (except samples)
+# Keep essential sample PDFs, ignore large collections
+pdfs/large_collection/
+pdfs/temp/
+*.pdf.bak
+
+# Screenshots - keep important ones, ignore temporary
+screenshots/temp/
+screenshots/*_debug_*.png
+screenshots/스크린샷*.png
+screenshots/screenshot*.png
+
+# Model files and data
+models/
+trained_models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+
+# Generated documentation
+docs/_build/
+site/
+
+# Profiling data
+*.prof
+*.lprof
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific temporary files
+output/debug_*
+output/temp_*
+output/test_*
+
+# Keep important files (negative patterns)
+!README.md
+!CLAUDE.md
+!requirements.txt
+!devlog/*.md
+!images/sample*.png
+!images/sample*.jpg
+!pdfs/sample*.pdf
+!output/sample*
+!screenshots/measure.png
