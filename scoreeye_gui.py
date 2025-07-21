@@ -60,7 +60,10 @@ class ScoreImageWidget(QLabel):
         self.show_staff_lines = True
         self.show_barlines = True
         self.show_candidates = False
+        self.show_system_groups = True  # Show system group clustering
         self.measure_count = 0
+        self.staff_systems = []
+        self.system_groups = []
         self.auto_fit = True  # Track if auto-fit is enabled
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
@@ -83,13 +86,18 @@ class ScoreImageWidget(QLabel):
         self.original_pixmap = QPixmap.fromImage(q_image)
         self.update_display()
         
-    def set_detection_results(self, staff_lines, barlines, measure_count, barline_candidates=None, staff_lines_with_ranges=None):
+    def set_detection_results(self, staff_lines, barlines, measure_count, barline_candidates=None, 
+                             staff_lines_with_ranges=None, barlines_with_systems=None,
+                             staff_systems=None, system_groups=None):
         """Set the detection results for overlay"""
         self.staff_lines = staff_lines
         self.barlines = barlines
         self.measure_count = measure_count
         self.barline_candidates = barline_candidates or []
         self.staff_lines_with_ranges = staff_lines_with_ranges or []
+        self.barlines_with_systems = barlines_with_systems or []
+        self.staff_systems = staff_systems or []
+        self.system_groups = system_groups or []
         self.update_display()
         
     def set_scale(self, scale_factor):
@@ -110,6 +118,11 @@ class ScoreImageWidget(QLabel):
     def toggle_candidates(self, show):
         """Toggle barline candidates overlay"""
         self.show_candidates = show
+        self.update_display()
+        
+    def toggle_system_groups(self, show):
+        """Toggle system group clustering overlay"""
+        self.show_system_groups = show
         self.update_display()
         
     def calculate_fit_scale(self):
@@ -189,31 +202,135 @@ class ScoreImageWidget(QLabel):
                 x_scaled = int(x * self.scale_factor)
                 painter.drawLine(x_scaled, 0, x_scaled, scaled_pixmap.height())
                 
-        # Draw barlines (only between staff boundaries)
+        # Draw barlines (within staff system boundaries)  
         if self.show_barlines and self.barlines:
             pen = QPen(QColor(255, 0, 0, 180), 3)  # Red with transparency
             painter.setPen(pen)
             font = QFont("Arial", 12)
             painter.setFont(font)
             
-            # Calculate staff bounds for limiting barline drawing
-            staff_top = min(self.staff_lines) if self.staff_lines else 0
-            staff_bottom = max(self.staff_lines) if self.staff_lines else scaled_pixmap.height()
-            margin = 20  # Small margin beyond staff
+            # Check if we have staff system information
+            if hasattr(self, 'barlines_with_systems') and self.barlines_with_systems:
+                # Cluster barline과 일반 barline 구분해서 그리기
+                cluster_barlines = []
+                regular_barlines = []
+                
+                for bl in self.barlines_with_systems:
+                    if bl.get('is_cluster_barline', False):
+                        cluster_barlines.append(bl)
+                    else:
+                        regular_barlines.append(bl)
+                
+                # 1. Cluster barlines 먼저 그리기 (cluster 전체를 관통하는 긴 barline)
+                if cluster_barlines:
+                    pen = QPen(QColor(255, 0, 0, 220), 4)  # 더 진한 빨간색, 더 굵은 선
+                    painter.setPen(pen)
+                    font = QFont("Arial", 14, QFont.Weight.Bold)
+                    painter.setFont(font)
+                    
+                    cluster_barline_count = 0
+                    for bl in cluster_barlines:
+                        cluster_barline_count += 1
+                        x_scaled = int(bl['x'] * self.scale_factor)
+                        y_start = max(0, int(bl['y_start'] * self.scale_factor))
+                        y_end = min(scaled_pixmap.height(), int(bl['y_end'] * self.scale_factor))
+                        
+                        # Cluster 전체를 관통하는 긴 barline 그리기
+                        painter.drawLine(x_scaled, y_start, x_scaled, y_end)
+                
+                # 2. 일반 barlines 그리기 (system별 개별 barline)
+                if regular_barlines:
+                    pen = QPen(QColor(255, 100, 100, 150), 2)  # 연한 빨간색, 얇은 선
+                    painter.setPen(pen)
+                    font = QFont("Arial", 10)
+                    painter.setFont(font)
+                    
+                    system_barline_counts = {}
+                    for bl in regular_barlines:
+                        x_scaled = int(bl['x'] * self.scale_factor)
+                        y_start = max(0, int(bl['y_start'] * self.scale_factor))
+                        y_end = min(scaled_pixmap.height(), int(bl['y_end'] * self.scale_factor))
+                        
+                        # 개별 system barline 그리기
+                        painter.drawLine(x_scaled, y_start, x_scaled, y_end)
+                        
+            else:
+                # 기존 방식 (호환성)
+                staff_top = min(self.staff_lines) if self.staff_lines else 0
+                staff_bottom = max(self.staff_lines) if self.staff_lines else scaled_pixmap.height()
+                margin = 20  # Small margin beyond staff
+                
+                for i, x in enumerate(self.barlines):
+                    x_scaled = int(x * self.scale_factor)
+                    y_start = int((staff_top - margin) * self.scale_factor)
+                    y_end = int((staff_bottom + margin) * self.scale_factor)
+                    
+                    # Ensure we don't go beyond image bounds
+                    y_start = max(0, y_start)
+                    y_end = min(scaled_pixmap.height(), y_end)
+                    
+                    painter.drawLine(x_scaled, y_start, x_scaled, y_end)
+                    
+                    # Draw barline number
+                    painter.drawText(x_scaled - 15, y_start + 30, f"{i+1}")
+        
+        # Draw system group clustering visualization
+        if self.show_system_groups and self.staff_systems and self.system_groups:
+            # Define colors for different system groups
+            group_colors = [
+                QColor(255, 100, 100, 100),  # Light red
+                QColor(100, 255, 100, 100),  # Light green  
+                QColor(100, 100, 255, 100),  # Light blue
+                QColor(255, 255, 100, 100),  # Light yellow
+                QColor(255, 100, 255, 100),  # Light magenta
+                QColor(100, 255, 255, 100),  # Light cyan
+            ]
             
-            for i, x in enumerate(self.barlines):
-                x_scaled = int(x * self.scale_factor)
-                y_start = int((staff_top - margin) * self.scale_factor)
-                y_end = int((staff_bottom + margin) * self.scale_factor)
+            for group_idx, system_indices in enumerate(self.system_groups):
+                if not system_indices:
+                    continue
+                    
+                color = group_colors[group_idx % len(group_colors)]
+                pen = QPen(color, 3)
+                painter.setPen(pen)
                 
-                # Ensure we don't go beyond image bounds
-                y_start = max(0, y_start)
-                y_end = min(scaled_pixmap.height(), y_end)
+                # Calculate group bounding box
+                group_top = float('inf')
+                group_bottom = float('-inf')
                 
-                painter.drawLine(x_scaled, y_start, x_scaled, y_end)
+                for sys_idx in system_indices:
+                    if sys_idx < len(self.staff_systems):
+                        system = self.staff_systems[sys_idx]
+                        group_top = min(group_top, system['top'])
+                        group_bottom = max(group_bottom, system['bottom'])
                 
-                # Draw barline number
-                painter.drawText(x_scaled - 15, y_start + 30, f"{i+1}")
+                if group_top == float('inf'):
+                    continue
+                
+                # Scale coordinates
+                group_top_scaled = int(group_top * self.scale_factor)
+                group_bottom_scaled = int(group_bottom * self.scale_factor)
+                
+                # Draw group boundary rectangle
+                margin = 10
+                painter.drawRect(
+                    margin, 
+                    group_top_scaled - margin,
+                    scaled_pixmap.width() - 2 * margin,
+                    group_bottom_scaled - group_top_scaled + 2 * margin
+                )
+                
+                # Draw group label
+                font = QFont("Arial", 14, QFont.Weight.Bold)
+                painter.setFont(font)
+                painter.setPen(QPen(color.darker(150), 2))
+                
+                group_label = f"Group {group_idx + 1} ({len(system_indices)} systems)"
+                painter.drawText(
+                    margin + 10, 
+                    group_top_scaled - margin + 20, 
+                    group_label
+                )
                 
         # Draw measure count
         if self.measure_count > 0:
@@ -375,6 +492,12 @@ class ScoreEyeGUI(QMainWindow):
         self.show_candidates_cb.setChecked(False)
         self.show_candidates_cb.toggled.connect(self.toggle_candidates)
         display_layout.addWidget(self.show_candidates_cb)
+        
+        self.show_system_groups_cb = QCheckBox("Show System Groups")
+        self.show_system_groups_cb.setChecked(True)
+        self.show_system_groups_cb.setToolTip("Show clustering of staff systems (for quartet/orchestra scores)")
+        self.show_system_groups_cb.toggled.connect(self.toggle_system_groups)
+        display_layout.addWidget(self.show_system_groups_cb)
         
         self.fit_window_btn = QPushButton("Fit to Window")
         self.fit_window_btn.clicked.connect(self.fit_to_window)
@@ -598,18 +721,46 @@ class ScoreEyeGUI(QMainWindow):
             results['barlines'],
             results['measure_count'],
             results.get('barline_candidates', []),
-            results.get('staff_lines_with_ranges', [])
+            results.get('staff_lines_with_ranges', []),
+            results.get('barlines_with_systems', []),
+            results.get('staff_systems', []),
+            results.get('system_groups', [])
         )
         
-        # Update results label
+        # Update results label with system-specific info
         candidates_count = len(results.get('barline_candidates', []))
-        self.results_label.setText(
+        barlines_with_systems = results.get('barlines_with_systems', [])
+        staff_systems = results.get('staff_systems', [])
+        system_groups = results.get('system_groups', [])
+        
+        results_text = (
             f"Detected:\n"
             f"- {len(results['staff_lines'])} staff lines\n"
+            f"- {len(staff_systems)} staff systems\n"
             f"- {candidates_count} barline candidates\n"
             f"- {len(results['barlines'])} valid barlines\n"
-            f"- {results['measure_count']} measures"
+            f"- {results['measure_count']} measures\n"
         )
+        
+        # Add system group clustering info
+        if system_groups:
+            results_text += f"\nSystem Clustering:\n"
+            results_text += f"- {len(system_groups)} system group(s)\n"
+            for group_idx, system_indices in enumerate(system_groups):
+                results_text += f"  Group {group_idx + 1}: {len(system_indices)} systems\n"
+        
+        # Add system-specific breakdown if available
+        if barlines_with_systems:
+            system_counts = {}
+            for bl in barlines_with_systems:
+                system_idx = bl['system_idx']
+                system_counts[system_idx] = system_counts.get(system_idx, 0) + 1
+            
+            results_text += f"\nPer System:\n"
+            for system_idx in sorted(system_counts.keys()):
+                results_text += f"- System {system_idx + 1}: {system_counts[system_idx]} barlines\n"
+        
+        self.results_label.setText(results_text)
         
         # Re-enable controls
         self.detect_btn.setEnabled(True)
@@ -639,6 +790,10 @@ class ScoreEyeGUI(QMainWindow):
     def toggle_candidates(self, checked):
         """Toggle barline candidates display"""
         self.image_widget.toggle_candidates(checked)
+        
+    def toggle_system_groups(self, checked):
+        """Toggle system group clustering display"""
+        self.image_widget.toggle_system_groups(checked)
         
     def fit_to_window(self):
         """Fit image to window and enable auto-fit"""

@@ -13,16 +13,113 @@ import argparse
 import fitz  # PyMuPDF
 from pdf2image import convert_from_path
 import tempfile
+from dataclasses import dataclass
+
+
+@dataclass
+class BarlineDetectionConfig:
+    """Configuration parameters for barline detection using relative ratios"""
+    
+    # Staff line detection ratios
+    staff_same_system_spacing_ratio: float = 2.5      # Lines within same staff system
+    staff_grouping_kernel_ratio: float = 0.7          # Kernel height for staff grouping
+    
+    # Barline validation ratios  
+    barline_max_extension_ratio: float = 2.5          # Maximum barline length extension
+    barline_roi_margin_ratio: float = 0.25            # ROI margin around intersection
+    barline_top_margin_ratio: float = 0.7             # Top margin for barline validation
+    barline_bottom_margin_ratio: float = 0.7          # Bottom margin for barline validation  
+    barline_max_allowed_extension_ratio: float = 1.2  # Maximum allowed extension beyond staff
+    
+    # HoughLinesP parameter ratios
+    hough_min_line_length_ratio: float = 0.5          # Minimum line length
+    hough_max_line_gap_ratio: float = 0.3             # Maximum line gap
+    hough_max_barline_length_ratio: float = 2.0       # Maximum barline length
+    
+    # Staff system detection ratios
+    staff_system_normal_spacing_ratio: float = 2.0    # Normal spacing within system
+    staff_system_grouping_ratio: float = 2.5          # Staff system grouping threshold
+    
+    # Multi-system consensus validation ratios
+    system_group_clustering_ratio: float = 8.0        # Y-coordinate clustering for system groups (increased for quartet clustering)
+    barline_consensus_tolerance: float = 0.5          # X-coordinate tolerance for barline matching
+    min_consensus_ratio: float = 0.8                  # Minimum ratio of systems that must have barline
+    
+    def __post_init__(self):
+        """Validate configuration parameters"""
+        if self.barline_max_allowed_extension_ratio < 0.5:
+            raise ValueError("barline_max_allowed_extension_ratio must be at least 0.5")
+        if self.staff_same_system_spacing_ratio < 1.0:
+            raise ValueError("staff_same_system_spacing_ratio must be at least 1.0")
+    
+    @classmethod
+    def create_strict_config(cls):
+        """Create configuration for strict barline detection (fewer false positives)"""
+        return cls(
+            barline_top_margin_ratio=0.5,
+            barline_bottom_margin_ratio=0.5,
+            barline_max_allowed_extension_ratio=1.0,
+            barline_roi_margin_ratio=0.2,
+            hough_min_line_length_ratio=0.6
+        )
+    
+    @classmethod
+    def create_relaxed_config(cls):
+        """Create configuration for relaxed barline detection (more detection, may have false positives)"""
+        return cls(
+            barline_top_margin_ratio=1.0,
+            barline_bottom_margin_ratio=1.0,
+            barline_max_allowed_extension_ratio=1.5,
+            barline_roi_margin_ratio=0.3,
+            hough_min_line_length_ratio=0.3
+        )
+    
+    def adjust_margins(self, scale_factor):
+        """Adjust all margin ratios by a scale factor"""
+        self.barline_top_margin_ratio *= scale_factor
+        self.barline_bottom_margin_ratio *= scale_factor
+        self.barline_max_allowed_extension_ratio *= scale_factor
+        self.barline_roi_margin_ratio *= scale_factor
+    
+    def get_description(self):
+        """Get human-readable description of current configuration"""
+        return f"""Barline Detection Configuration:
+  Staff Detection:
+    - Same system spacing ratio: {self.staff_same_system_spacing_ratio}
+    - Grouping kernel ratio: {self.staff_grouping_kernel_ratio}
+  
+  Barline Validation:
+    - Top margin ratio: {self.barline_top_margin_ratio}
+    - Bottom margin ratio: {self.barline_bottom_margin_ratio}
+    - Max extension ratio: {self.barline_max_allowed_extension_ratio}
+    - ROI margin ratio: {self.barline_roi_margin_ratio}
+  
+  HoughLinesP Parameters:
+    - Min line length ratio: {self.hough_min_line_length_ratio}
+    - Max line gap ratio: {self.hough_max_line_gap_ratio}
+    - Max barline length ratio: {self.hough_max_barline_length_ratio}
+  
+  Staff System Detection:
+    - Normal spacing ratio: {self.staff_system_normal_spacing_ratio}
+    - Grouping ratio: {self.staff_system_grouping_ratio}
+  
+  Multi-System Consensus:
+    - System group clustering ratio: {self.system_group_clustering_ratio}
+    - Barline consensus tolerance: {self.barline_consensus_tolerance}
+    - Minimum consensus ratio: {self.min_consensus_ratio}
+"""
 
 
 class MeasureDetector:
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, config=None):
         """Initialize the MeasureDetector.
         
         Args:
             debug (bool): If True, displays intermediate processing steps
+            config (BarlineDetectionConfig): Configuration for detection parameters
         """
         self.debug = debug
+        self.config = config or BarlineDetectionConfig()
         self.staff_lines = []
         self.barlines = []
         self.binary_img = None
@@ -165,7 +262,7 @@ class MeasureDetector:
         for i, peak in enumerate(peaks):
             if len(current_staff) == 0:
                 current_staff.append(peak)
-            elif peak - current_staff[-1] < avg_spacing * 2.5:  # Lines within same staff
+            elif peak - current_staff[-1] < avg_spacing * self.config.staff_same_system_spacing_ratio:  # Lines within same staff
                 current_staff.append(peak)
             else:  # New staff system
                 if len(current_staff) >= 4:  # Valid staff has at least 4 lines
@@ -254,7 +351,7 @@ class MeasureDetector:
         
         # Kernel height = 70% of staff line spacing
         # This detects staff intersections while ignoring gaps between staff lines
-        kernel_height = max(8, int(avg_spacing * 0.7))
+        kernel_height = max(8, int(avg_spacing * self.config.staff_grouping_kernel_ratio))
         return kernel_height
 
     def preprocess_for_hough(self, img):
@@ -446,7 +543,7 @@ class MeasureDetector:
         return min(score, 100)
     
     def validate_barline_with_staff(self, barline_analysis, staff_lines):
-        """스태프 라인과의 교차를 확인하여 바라인 검증
+        """스태프 라인과의 교차를 확인하여 바라인 검증 (완전한 범위 포함)
         
         Args:
             barline_analysis (dict): Barline candidate analysis
@@ -464,18 +561,120 @@ class MeasureDetector:
             if intersection_found:
                 intersections.append(staff_y)
         
+        # 기본 교차점 검증
+        basic_valid = len(intersections) >= 3
+        
+        # 완전한 범위 검증 추가
+        full_span_valid = False
+        if basic_valid and len(staff_lines) >= 5:
+            # 5개 staff line 시스템의 경우 최상단-최하단 검증
+            staff_groups = self._get_5_line_groups(staff_lines)
+            
+            for group in staff_groups:
+                if self._barline_covers_full_staff_group(center_x, group):
+                    full_span_valid = True
+                    break
+        else:
+            # 5개 미만인 경우는 기본 검증만 적용
+            full_span_valid = basic_valid
+        
         # 교차점 분석
         validation_result = {
             'intersection_count': len(intersections),
             'staff_coverage_ratio': len(intersections) / len(staff_lines) if staff_lines else 0,
             'intersections': intersections,
-            'is_valid_barline': len(intersections) >= 3  # 최소 3개 스태프와 교차
+            'is_valid_barline': basic_valid and full_span_valid,
+            'full_span_valid': full_span_valid
         }
         
         return validation_result
     
+    def _get_5_line_groups(self, staff_lines):
+        """Staff line을 5개씩 그룹화"""
+        groups = []
+        for i in range(0, len(staff_lines) - 4, 5):
+            groups.append(staff_lines[i:i+5])
+        return groups
+    
+    def _barline_covers_full_staff_group(self, x, staff_group):
+        """Barline이 5개 staff line 그룹을 완전히 커버하는지 확인 (적절한 길이 포함)"""
+        if len(staff_group) != 5:
+            return False
+        
+        top_staff = min(staff_group)
+        bottom_staff = max(staff_group)
+        
+        # 1. 최상단과 최하단에서 교차점 확인
+        top_intersect = self.check_intersection_at_staff(x, top_staff)
+        bottom_intersect = self.check_intersection_at_staff(x, bottom_staff)
+        
+        if not (top_intersect and bottom_intersect):
+            return False
+        
+        # 2. 길이 검증: barline이 너무 길지 않아야 함
+        if not hasattr(self, 'binary_img') or self.binary_img is None:
+            return True  # 이미지 정보가 없으면 기본적으로 허용
+        
+        # 전체 이미지에서 이 x 좌표의 수직 선분 범위 확인
+        column = self.binary_img[:, x]
+        vertical_segments = self._find_continuous_segments(column)
+        
+        # Staff group 범위를 커버하는 가장 긴 세그먼트 찾기
+        covering_segment = None
+        max_coverage = 0
+        
+        for start_y, end_y in vertical_segments:
+            # 이 세그먼트가 staff group을 얼마나 커버하는지 계산
+            coverage = self._calculate_staff_coverage(start_y, end_y, top_staff, bottom_staff)
+            if coverage > max_coverage:
+                max_coverage = coverage
+                covering_segment = (start_y, end_y)
+        
+        if covering_segment is None:
+            return False
+        
+        # 3. 세그먼트 길이 제한 확인: staff 간격에 상대적 기준
+        start_y, end_y = covering_segment
+        staff_height = bottom_staff - top_staff
+        
+        # Staff 간격 계산
+        if len(staff_group) >= 2:
+            spacings = [staff_group[i+1] - staff_group[i] for i in range(len(staff_group)-1)]
+            avg_spacing = np.median(spacings)
+        else:
+            avg_spacing = 12  # 기본값
+            
+        max_allowed_length = staff_height + int(avg_spacing * self.config.barline_max_extension_ratio)  # Staff 높이 + 설정된 연장 비율
+        actual_length = end_y - start_y + 1
+        
+        length_valid = actual_length <= max_allowed_length
+        
+        if self.debug:
+            if not length_valid:
+                print(f"      Barline too long: {actual_length}px > {max_allowed_length}px allowed")
+                print(f"      (Staff spacing: {avg_spacing:.1f}px, ratio: {actual_length/avg_spacing:.1f}x)")
+            else:
+                print(f"      Barline length OK: {actual_length}px <= {max_allowed_length}px")
+                print(f"      (Ratio: {actual_length/avg_spacing:.1f}x staff spacing)")
+        
+        return length_valid
+    
+    def _calculate_staff_coverage(self, segment_start, segment_end, top_staff, bottom_staff):
+        """세그먼트가 staff group을 얼마나 커버하는지 계산"""
+        # 세그먼트와 staff 영역의 겹치는 부분 계산
+        overlap_start = max(segment_start, top_staff - 10)  # 10px 여유
+        overlap_end = min(segment_end, bottom_staff + 10)   # 10px 여유
+        
+        if overlap_end <= overlap_start:
+            return 0.0
+        
+        overlap_length = overlap_end - overlap_start + 1
+        staff_height = bottom_staff - top_staff + 20  # 위아래 10px씩 여유
+        
+        return overlap_length / staff_height  # 0.0 ~ 1.0+ 범위
+    
     def check_intersection_at_staff(self, x, staff_y):
-        """특정 X좌표에서 스태프 라인과의 교차점 확인
+        """특정 X좌표에서 스태프 라인과의 교차점 확인 (상대적 기준)
         
         Args:
             x (int): X-coordinate to check
@@ -486,10 +685,23 @@ class MeasureDetector:
         """
         if not hasattr(self, 'binary_img') or self.binary_img is None:
             return False
-            
-        # 스태프 라인 주변 ±3픽셀 영역에서 수직 픽셀 존재 확인
-        roi_start = max(0, staff_y - 3)
-        roi_end = min(self.binary_img.shape[0], staff_y + 4)
+        
+        # 평균 staff line 간격 계산
+        if len(self.staff_lines) >= 2:
+            spacings = [self.staff_lines[i+1] - self.staff_lines[i] 
+                       for i in range(len(self.staff_lines)-1)]
+            avg_spacing = np.median([s for s in spacings if s < 30])  # 30px 이하만 intra-staff 간격
+            if len([s for s in spacings if s < 30]) == 0:
+                avg_spacing = 12  # 기본값
+        else:
+            avg_spacing = 12  # 기본값
+        
+        # 상대적 margin: 간격의 25%
+        margin = max(2, int(avg_spacing * self.config.barline_roi_margin_ratio))
+        
+        # 스태프 라인 주변 영역에서 수직 픽셀 존재 확인
+        roi_start = max(0, staff_y - margin)
+        roi_end = min(self.binary_img.shape[0], staff_y + margin + 1)
         
         if x < self.binary_img.shape[1]:
             roi_column = self.binary_img[roi_start:roi_end, x]
@@ -569,8 +781,318 @@ class MeasureDetector:
         
         return params
     
-    def detect_barlines_hough(self, binary_img):
-        """HoughLinesP 기반 바라인 검출 메인 함수
+    def detect_barlines_per_system(self, binary_img):
+        """각 staff system별로 독립적으로 barline 검출
+        
+        Args:
+            binary_img (numpy.ndarray): Binary image
+            
+        Returns:
+            list: X-coordinates of detected barlines (전체 통합)
+        """
+        if len(self.staff_lines) < 3:
+            return []
+        
+        # Store binary image for intersection checking
+        self.binary_img = binary_img
+        
+        # 1. Staff system들을 먼저 그룹화
+        staff_systems = self.group_staff_lines_into_systems()
+        if not staff_systems:
+            if self.debug:
+                print("No complete staff systems found, falling back to global detection")
+            return self.detect_barlines_hough_global(binary_img)
+        
+        all_barlines_by_system = []  # 각 system별 barline들
+        
+        # 2. 각 staff system별로 독립적으로 검출
+        for system_idx, system in enumerate(staff_systems):
+            if self.debug:
+                print(f"\n=== Processing Staff System {system_idx + 1} ===")
+                print(f"Y range: {system['top']} - {system['bottom']} (height: {system['height']})")
+            
+            # System ROI 추출
+            roi_margin = int(system['height'] * 0.3)  # 30% 여유
+            roi_top = max(0, system['top'] - roi_margin)
+            roi_bottom = min(binary_img.shape[0], system['bottom'] + roi_margin)
+            
+            system_roi = binary_img[roi_top:roi_bottom, :]
+            
+            if self.debug:
+                print(f"ROI: {roi_top} - {roi_bottom} (expanded with {roi_margin}px margin)")
+            
+            # 이 ROI에서 barline 검출
+            system_barlines = self.detect_barlines_in_roi(system_roi, system, roi_top)
+            
+            # System에 barline 정보 저장 (상세 정보 포함)
+            system_barlines_detailed = []
+            for x in system_barlines:
+                barline_info = {
+                    'x': x,
+                    'system_idx': system_idx,
+                    'y_start': system['top'] - 5,
+                    'y_end': system['bottom'] + 5,
+                    'system_height': system['height'],
+                    'staff_lines': system['lines']
+                }
+                system_barlines_detailed.append(barline_info)
+            
+            all_barlines_by_system.append(system_barlines_detailed)
+            system['barlines'] = system_barlines
+            system['barline_count'] = len(system_barlines)
+            
+            if self.debug:
+                print(f"Detected {len(system_barlines)} barlines in system {system_idx + 1}: {system_barlines}")
+        
+        # 3. Multi-system consensus validation 적용
+        validated_barlines = self.validate_barlines_with_consensus(all_barlines_by_system)
+        
+        # 4. 검증된 barline들로 최종 결과 구성
+        all_barlines = []
+        barlines_with_systems = []
+        
+        for barline in validated_barlines:
+            all_barlines.append(barline['x'])
+            barlines_with_systems.append(barline)
+        
+        # 결과를 self에 저장
+        self.staff_systems = staff_systems
+        self.barlines_with_systems = barlines_with_systems
+        
+        if self.debug:
+            print(f"\n=== Final Results (After Consensus Validation) ===")
+            print(f"Total validated barlines: {len(all_barlines)}")
+            print(f"Barline-system assignments: {len(barlines_with_systems)}")
+            for system_idx, system in enumerate(staff_systems):
+                original_count = system['barline_count']
+                validated_count = len([bl for bl in validated_barlines if system_idx in bl.get('systems_with_barline', [])])
+                print(f"System {system_idx + 1}: {original_count} detected → {validated_count} validated")
+        
+        return sorted(all_barlines)
+    
+    def detect_barlines_in_roi(self, roi_img, system_info, roi_offset_y):
+        """특정 staff system ROI에서 barline 검출
+        
+        Args:
+            roi_img (numpy.ndarray): ROI binary image
+            system_info (dict): Staff system metadata
+            roi_offset_y (int): ROI의 원본 이미지에서의 y-offset
+            
+        Returns:
+            list: X-coordinates of barlines detected in this ROI
+        """
+        # ROI에 맞게 staff lines 좌표 조정
+        adjusted_staff_lines = [y - roi_offset_y for y in system_info['lines']]
+        
+        # 파라미터 조정: staff line 간격에 상대적 기준
+        avg_spacing = system_info['avg_spacing']
+        params = {
+            'threshold': max(5, int(system_info['height'] * 0.2)),  # System 높이 기반
+            'minLineLength': max(3, int(avg_spacing * self.config.hough_min_line_length_ratio)),
+            'maxLineGap': max(2, int(avg_spacing * self.config.hough_max_line_gap_ratio)),
+            'angle_tolerance': 20,
+            'max_barline_length': system_info['height'] + int(avg_spacing * self.config.hough_max_barline_length_ratio)  # Staff 높이 + 설정된 비율
+        }
+        
+        if self.debug:
+            print(f"  ROI parameters: {params}")
+        
+        # HoughLinesP 검출
+        all_lines = cv2.HoughLinesP(
+            roi_img,
+            rho=1,
+            theta=np.pi/180,
+            threshold=params['threshold'],
+            minLineLength=params['minLineLength'],
+            maxLineGap=params['maxLineGap']
+        )
+        
+        if all_lines is None:
+            return []
+        
+        if self.debug:
+            print(f"  Raw lines detected: {len(all_lines)}")
+        
+        # 수직성 필터링
+        vertical_lines = self.filter_vertical_lines(all_lines, params['angle_tolerance'])
+        if self.debug:
+            print(f"  Vertical lines: {len(vertical_lines)}")
+        
+        if not vertical_lines:
+            return []
+        
+        # X좌표 기반 그룹핑
+        x_tolerance = max(5, int(roi_img.shape[1] * 0.01))  # ROI 너비의 1%
+        line_groups = self.group_lines_by_x_coordinate(vertical_lines, x_tolerance)
+        
+        if self.debug:
+            print(f"  Line groups: {len(line_groups)}")
+        
+        if not line_groups:
+            return []
+        
+        # 각 그룹 분석 및 검증
+        final_barlines = []
+        for group in line_groups:
+            analysis = self.analyze_line_group(group)
+            
+            # ROI 내에서의 검증 (완화된 기준)
+            if analysis['barline_score'] >= 20:  # 더 관대한 점수
+                center_x = int(analysis['center_x'])
+                
+                # 1. 기본 교차점 확인
+                intersections = 0
+                for staff_y in adjusted_staff_lines:
+                    if (0 <= staff_y < roi_img.shape[0] and 
+                        0 <= center_x < roi_img.shape[1]):
+                        # 교차점 확인 (ROI 좌표계)
+                        roi_start = max(0, staff_y - 2)
+                        roi_end = min(roi_img.shape[0], staff_y + 3)
+                        if np.any(roi_img[roi_start:roi_end, center_x] > 0):
+                            intersections += 1
+                
+                # 2. 완전한 범위 검증: 최상단부터 최하단까지 걸쳐야 함 (적절한 길이 포함)
+                if intersections >= 3:  # 최소 3개 교차
+                    full_span_valid = self.validate_barline_full_span(
+                        group, center_x, adjusted_staff_lines, roi_img, params['max_barline_length'])
+                    
+                    if full_span_valid:
+                        final_barlines.append(center_x)
+                        if self.debug:
+                            print(f"    Valid barline: x={center_x}, score={analysis['barline_score']:.1f}, "
+                                  f"intersections={intersections}, full_span=True")
+                    else:
+                        if self.debug:
+                            print(f"    Rejected barline: x={center_x}, score={analysis['barline_score']:.1f}, "
+                                  f"intersections={intersections}, full_span=False")
+                elif self.debug:
+                    print(f"    Rejected barline: x={center_x}, score={analysis['barline_score']:.1f}, "
+                          f"intersections={intersections} (too few)")
+        
+        return sorted(final_barlines)
+    
+    def validate_barline_full_span(self, line_group, center_x, adjusted_staff_lines, roi_img, max_allowed_length=None):
+        """Barline이 최상단부터 최하단 staff line까지 완전히 걸치는지 검증 (길이 제한 포함)
+        
+        Args:
+            line_group (list): 같은 x 좌표의 선분들
+            center_x (int): 그룹의 중심 x 좌표
+            adjusted_staff_lines (list): ROI 좌표계의 staff line y 좌표들
+            roi_img (numpy.ndarray): ROI binary image
+            max_allowed_length (int): 허용되는 최대 barline 길이
+            
+        Returns:
+            bool: True if barline spans from top to bottom staff line with proper length
+        """
+        if len(adjusted_staff_lines) < 3:
+            return False
+        
+        # 1. 시스템의 최상단과 최하단 staff line 좌표
+        top_staff = min(adjusted_staff_lines)
+        bottom_staff = max(adjusted_staff_lines) 
+        
+        # 2. 선분 그룹의 실제 y 범위 계산
+        group_y_min = float('inf')
+        group_y_max = float('-inf')
+        
+        for line_info in line_group:
+            # HoughLinesP 결과에서 실제 선분 좌표 추출
+            x1, y1, x2, y2 = line_info['line']
+            group_y_min = min(group_y_min, y1, y2)
+            group_y_max = max(group_y_max, y1, y2)
+        
+        if self.debug:
+            print(f"      Group Y range: {group_y_min:.1f} - {group_y_max:.1f}")
+            print(f"      Staff range: {top_staff} - {bottom_staff}")
+        
+        # 3. Y 범위 검증: staff line 간격에 상대적인 기준
+        # Staff line 간격을 계산 (ROI 좌표계 기준)
+        if len(adjusted_staff_lines) >= 2:
+            spacings = [adjusted_staff_lines[i+1] - adjusted_staff_lines[i] 
+                       for i in range(len(adjusted_staff_lines)-1)]
+            avg_spacing = np.median(spacings)
+        else:
+            avg_spacing = 12  # 기본값
+        
+        # 상대적 기준으로 여유값 계산
+        top_margin = avg_spacing * self.config.barline_top_margin_ratio      # 설정된 top margin 비율
+        bottom_margin = avg_spacing * self.config.barline_bottom_margin_ratio   # 설정된 bottom margin 비율  
+        max_extension = avg_spacing * self.config.barline_max_allowed_extension_ratio   # 설정된 최대 연장 비율
+        
+        # 3.1 최소 범위 검증: 최상단과 최하단에 도달해야 함
+        reaches_top = group_y_min <= (top_staff + top_margin)
+        reaches_bottom = group_y_max >= (bottom_staff - bottom_margin)
+        
+        # 3.2 최대 범위 검증: 너무 길면 안됨
+        extends_too_much_above = group_y_min < (top_staff - max_extension)
+        extends_too_much_below = group_y_max > (bottom_staff + max_extension)
+        
+        if not (reaches_top and reaches_bottom):
+            if self.debug:
+                print(f"      Range check failed: reaches_top={reaches_top}, reaches_bottom={reaches_bottom}")
+            return False
+            
+        if extends_too_much_above or extends_too_much_below:
+            if self.debug:
+                print(f"      Length check failed: extends_above={extends_too_much_above}, extends_below={extends_too_much_below}")
+                print(f"      Allowed range: {top_staff - max_extension} to {bottom_staff + max_extension}")
+            return False
+        
+        # 4. 실제 픽셀 교차점 검증: 최상단과 최하단에서 교차 확인
+        top_intersect = self.check_staff_intersection_in_roi(
+            roi_img, center_x, top_staff, avg_spacing)
+        bottom_intersect = self.check_staff_intersection_in_roi(
+            roi_img, center_x, bottom_staff, avg_spacing)
+        
+        if self.debug:
+            print(f"      Pixel intersect: top={top_intersect}, bottom={bottom_intersect}")
+            print(f"      Staff spacing: {avg_spacing:.1f}px, margins: top={top_margin:.1f}, bottom={bottom_margin:.1f}, ext={max_extension:.1f}")
+        
+        # 5. 길이 제한 검증: staff 간격에 상대적 기준
+        if max_allowed_length is not None:
+            actual_length = group_y_max - group_y_min + 1
+            length_valid = actual_length <= max_allowed_length
+            
+            if not length_valid:
+                if self.debug:
+                    print(f"      Length check failed: {actual_length:.1f}px > {max_allowed_length}px allowed")
+                    print(f"      (Staff spacing: {avg_spacing:.1f}px)")
+                return False
+            elif self.debug:
+                print(f"      Length check passed: {actual_length:.1f}px <= {max_allowed_length}px")
+                print(f"      (Ratio: {actual_length/avg_spacing:.1f}x staff spacing)")
+        
+        return top_intersect and bottom_intersect
+    
+    def check_staff_intersection_in_roi(self, roi_img, x, staff_y, avg_spacing=12):
+        """ROI 내에서 특정 위치의 픽셀 교차점 확인 (상대적 기준)
+        
+        Args:
+            roi_img (numpy.ndarray): ROI binary image
+            x (int): X coordinate to check
+            staff_y (int): Staff line Y coordinate (in ROI coordinates)
+            avg_spacing (float): Average staff line spacing for relative margin
+            
+        Returns:
+            bool: True if intersection exists
+        """
+        if (not (0 <= x < roi_img.shape[1]) or 
+            not (0 <= staff_y < roi_img.shape[0])):
+            return False
+        
+        # Staff line 주변 margin: 간격의 25%
+        margin = max(2, int(avg_spacing * self.config.barline_roi_margin_ratio))
+        
+        # Staff line 주변 margin 범위에서 픽셀 확인
+        y_start = max(0, staff_y - margin)
+        y_end = min(roi_img.shape[0], staff_y + margin + 1)
+        
+        # 해당 x 좌표의 column에서 교차점 확인
+        column_segment = roi_img[y_start:y_end, x]
+        return np.any(column_segment > 0)
+
+    def detect_barlines_hough_global(self, binary_img):
+        """HoughLinesP 기반 전역 바라인 검출 (백업 방식)
         
         Args:
             binary_img (numpy.ndarray): Binary image
@@ -636,10 +1158,25 @@ class MeasureDetector:
                 print(f"  Barline {i+1}: x={barline['x']}, score={barline['score']:.1f}, "
                       f"intersections={barline['staff_intersections']}")
         
+        # Staff system 기반으로 결과 재구성
+        staff_systems = self.group_staff_lines_into_systems()
+        if not staff_systems:
+            if self.debug:
+                print("No complete staff systems found (need 5-line groups)")
+            return [b['x'] for b in final_barlines]
+        
+        # Barline들을 staff system에 할당
+        barlines_with_systems = self.assign_barlines_to_staff_systems(
+            [b['x'] for b in final_barlines], staff_systems)
+        
+        # 결과를 self에 저장 (시각화에서 사용)
+        self.staff_systems = staff_systems
+        self.barlines_with_systems = barlines_with_systems
+        
         return [b['x'] for b in final_barlines]
     
     def detect_barlines(self, binary_img):
-        """바라인 검출 - HoughLinesP 기반 구현
+        """바라인 검출 - Staff System별 독립적 검출
         
         Args:
             binary_img (numpy.ndarray): Binary image
@@ -647,7 +1184,7 @@ class MeasureDetector:
         Returns:
             list: X-coordinates of detected barlines
         """
-        return self.detect_barlines_hough(binary_img)
+        return self.detect_barlines_per_system(binary_img)
 
     def detect_barlines_segment_based(self, binary_img):
         """Detect barline candidates using segment-based approach.
@@ -999,6 +1536,252 @@ class MeasureDetector:
         
         return min_start - margin <= x <= max_end + margin
     
+    def detect_system_groups(self):
+        """Y좌표 기반으로 staff system들을 clustering하여 system group들을 찾는다.
+        4중주, 오케스트라 등에서 함께 움직이는 system들을 그룹화한다.
+        
+        Returns:
+            list: 각 system group의 리스트 [[system1_indices], [system2_indices], ...]
+        """
+        # staff_systems가 초기화되지 않은 경우, group_staff_lines_into_systems()를 먼저 호출
+        if not hasattr(self, 'staff_systems') or not self.staff_systems:
+            staff_systems = self.group_staff_lines_into_systems()
+            if not staff_systems:
+                return []
+            self.staff_systems = staff_systems
+        
+        if len(self.staff_systems) < 2:
+            # System이 2개 미만이면 clustering 불필요
+            return [list(range(len(self.staff_systems)))] if self.staff_systems else []
+        
+        # 각 staff system의 중심 Y좌표 계산
+        system_centers = []
+        for i, system_info in enumerate(self.staff_systems):
+            # 'lines' key 사용 (group_staff_lines_into_systems에서 반환하는 구조에 맞춤)
+            staff_lines = system_info['lines']
+            center_y = np.mean(staff_lines)
+            system_centers.append({'idx': i, 'center_y': center_y})
+        
+        # Y좌표로 정렬
+        system_centers.sort(key=lambda x: x['center_y'])
+        
+        # Adaptive clustering threshold 계산
+        if len(self.staff_lines) >= 5:
+            avg_spacing = np.median([self.staff_lines[i+1] - self.staff_lines[i] 
+                                   for i in range(len(self.staff_lines)-1)])
+            
+            # System 간의 실제 간격들을 분석해서 threshold 결정
+            system_gaps = []
+            for i in range(1, len(system_centers)):
+                gap = system_centers[i]['center_y'] - system_centers[i-1]['center_y']
+                system_gaps.append(gap)
+            
+            if system_gaps:
+                # K-means style clustering을 사용해서 quartet 패턴 감지
+                sorted_gaps = sorted(system_gaps)
+                
+                if len(sorted_gaps) >= 3:
+                    # 간격들을 히스토그램으로 분석해서 두 개의 클러스터로 분리
+                    # 4중주 패턴에서는 보통 작은 간격(quartet 내부)과 큰 간격(quartet 간) 두 그룹이 있음
+                    
+                    if len(sorted_gaps) >= 6:  # 12개 system의 경우 11개 간격
+                        # Jump detection: 간격의 급격한 변화를 찾아서 quartet 경계를 결정
+                        # 연속된 간격들 사이의 차이를 계산
+                        gap_jumps = []
+                        for i in range(1, len(sorted_gaps)):
+                            jump = sorted_gaps[i] - sorted_gaps[i-1]
+                            gap_jumps.append(jump)
+                        
+                        if gap_jumps:
+                            # 큰 jump이 있다면 그것을 기준으로 threshold 설정
+                            max_jump = max(gap_jumps)
+                            max_jump_idx = gap_jumps.index(max_jump)
+                            
+                            if max_jump > 50:  # 충분히 큰 jump가 있는 경우
+                                # jump 직전과 직후의 중간값을 threshold로 사용
+                                small_gap_max = sorted_gaps[max_jump_idx]
+                                large_gap_min = sorted_gaps[max_jump_idx + 1]
+                                cluster_threshold = (small_gap_max + large_gap_min) / 2
+                                
+                                if self.debug:
+                                    print(f"Jump detection analysis:")
+                                    print(f"  All gaps: {[int(g) for g in sorted_gaps]}")
+                                    print(f"  Gap jumps: {[int(j) for j in gap_jumps]}")
+                                    print(f"  Max jump: {max_jump:.1f} at index {max_jump_idx}")
+                                    print(f"  Small gaps max: {small_gap_max:.1f}, Large gaps min: {large_gap_min:.1f}")
+                                    print(f"  Quartet threshold: {cluster_threshold:.1f}")
+                            else:
+                                # jump이 작다면 percentile 방법 사용
+                                q60 = np.percentile(sorted_gaps, 60)
+                                cluster_threshold = q60
+                                
+                                if self.debug:
+                                    print(f"Percentile-based threshold: {cluster_threshold:.1f} (60th percentile)")
+                        else:
+                            cluster_threshold = avg_spacing * self.config.system_group_clustering_ratio
+                    else:
+                        # 간격 수가 적을 때는 단순한 방법 사용
+                        median_gap = np.median(sorted_gaps)
+                        # 중간값보다 1.5배 큰 간격을 quartet 간 간격으로 간주
+                        cluster_threshold = median_gap * 1.3
+                        
+                        if self.debug:
+                            print(f"Simple quartet threshold: {cluster_threshold:.1f} (median: {median_gap:.1f} * 1.3)")
+                else:
+                    cluster_threshold = avg_spacing * self.config.system_group_clustering_ratio
+            else:
+                cluster_threshold = avg_spacing * self.config.system_group_clustering_ratio
+        else:
+            cluster_threshold = 100  # 기본값
+        
+        # Clustering 수행
+        system_groups = []
+        current_group = [system_centers[0]['idx']]
+        
+        for i in range(1, len(system_centers)):
+            prev_center = system_centers[i-1]['center_y']
+            curr_center = system_centers[i]['center_y']
+            
+            if curr_center - prev_center <= cluster_threshold:
+                # 같은 그룹에 추가
+                current_group.append(system_centers[i]['idx'])
+            else:
+                # 새 그룹 시작
+                system_groups.append(current_group)
+                current_group = [system_centers[i]['idx']]
+        
+        # 마지막 그룹 추가
+        if current_group:
+            system_groups.append(current_group)
+        
+        if self.debug:
+            print(f"\n=== System Group Clustering ===")
+            print(f"Clustering threshold: {cluster_threshold:.1f} pixels")
+            print(f"Detected {len(system_groups)} system group(s):")
+            for i, group in enumerate(system_groups):
+                group_centers = [system_centers[j]['center_y'] for j in range(len(system_centers)) 
+                               if system_centers[j]['idx'] in group]
+                print(f"  Group {i+1}: Systems {group} (Y centers: {group_centers})")
+        
+        return system_groups
+    
+    def validate_barlines_with_consensus(self, all_barlines_by_system):
+        """Multi-system consensus를 통해 유효한 barline들만 선별한다.
+        System group 내의 모든(또는 대부분) system에서 검출되는 barline만 유효한 것으로 간주한다.
+        
+        Args:
+            all_barlines_by_system (list): 각 system별 barline 리스트
+            
+        Returns:
+            list: Consensus validation을 통과한 barline들
+        """
+        if not all_barlines_by_system:
+            return []
+        
+        system_groups = self.detect_system_groups()
+        validated_barlines = []
+        
+        # Staff line spacing 기반으로 tolerance 계산
+        if len(self.staff_lines) >= 5:
+            avg_spacing = np.median([self.staff_lines[i+1] - self.staff_lines[i] 
+                                   for i in range(len(self.staff_lines)-1)])
+            x_tolerance = int(avg_spacing * self.config.barline_consensus_tolerance)
+        else:
+            x_tolerance = 5  # 기본값
+        
+        if self.debug:
+            print(f"\n=== Multi-System Barline Consensus Validation ===")
+            print(f"X-coordinate tolerance: {x_tolerance} pixels")
+            print(f"Minimum consensus ratio: {self.config.min_consensus_ratio}")
+        
+        for group_idx, system_indices in enumerate(system_groups):
+            if self.debug:
+                print(f"\nProcessing System Group {group_idx + 1}: {system_indices}")
+            
+            # 이 그룹의 system들에서 검출된 모든 barline들 수집
+            group_barlines = []
+            for sys_idx in system_indices:
+                if sys_idx < len(all_barlines_by_system):
+                    for barline in all_barlines_by_system[sys_idx]:
+                        group_barlines.append({
+                            'x': barline['x'],
+                            'system_idx': sys_idx,
+                            'barline_data': barline
+                        })
+            
+            if not group_barlines:
+                continue
+            
+            # X좌표 기준으로 정렬
+            group_barlines.sort(key=lambda b: b['x'])
+            
+            # X좌표가 비슷한 barline들을 clustering
+            barline_clusters = []
+            current_cluster = [group_barlines[0]]
+            
+            for i in range(1, len(group_barlines)):
+                if group_barlines[i]['x'] - current_cluster[-1]['x'] <= x_tolerance:
+                    current_cluster.append(group_barlines[i])
+                else:
+                    barline_clusters.append(current_cluster)
+                    current_cluster = [group_barlines[i]]
+            
+            if current_cluster:
+                barline_clusters.append(current_cluster)
+            
+            # 각 cluster에서 consensus 검증
+            min_required_systems = max(1, int(len(system_indices) * self.config.min_consensus_ratio))
+            
+            for cluster in barline_clusters:
+                # 이 cluster에서 barline을 검출한 system들 확인
+                systems_with_barline = set(b['system_idx'] for b in cluster)
+                consensus_count = len(systems_with_barline)
+                
+                if consensus_count >= min_required_systems:
+                    # Consensus 통과 - cluster 전체를 관통하는 긴 barline 생성
+                    avg_x = int(np.mean([b['x'] for b in cluster]))
+                    
+                    # Cluster의 전체 Y 범위 계산 (cluster 내 모든 system의 top~bottom)
+                    cluster_top = float('inf')
+                    cluster_bottom = float('-inf')
+                    
+                    for sys_idx in system_indices:
+                        if sys_idx < len(self.staff_systems):
+                            system = self.staff_systems[sys_idx]
+                            cluster_top = min(cluster_top, system['top'])
+                            cluster_bottom = max(cluster_bottom, system['bottom'])
+                    
+                    if cluster_top == float('inf'):
+                        continue
+                    
+                    # Cluster 전체를 관통하는 barline 생성
+                    cluster_barline = {
+                        'x': avg_x,
+                        'system_idx': group_idx,  # Group index as identifier
+                        'y_start': cluster_top - 10,  # 약간의 여유
+                        'y_end': cluster_bottom + 10,  # 약간의 여유
+                        'consensus_count': consensus_count,
+                        'group_size': len(system_indices),
+                        'systems_with_barline': list(systems_with_barline),
+                        'is_cluster_barline': True,  # 클러스터 바라인 표시
+                        'cluster_height': cluster_bottom - cluster_top
+                    }
+                    
+                    validated_barlines.append(cluster_barline)
+                    
+                    if self.debug:
+                        print(f"  ✓ Barline at x={avg_x} - Consensus: {consensus_count}/{len(system_indices)} systems")
+                        print(f"    Systems: {sorted(systems_with_barline)}")
+                else:
+                    if self.debug:
+                        avg_x = int(np.mean([b['x'] for b in cluster]))
+                        print(f"  ✗ Barline at x={avg_x} - Insufficient consensus: {consensus_count}/{len(system_indices)} systems")
+        
+        if self.debug:
+            print(f"\nConsensus validation result: {len(validated_barlines)} validated barlines")
+        
+        return validated_barlines
+    
     def _is_valid_barline_for_staff(self, x, staff_group):
         """Comprehensive check if x-coordinate represents a valid barline for a staff group.
         
@@ -1093,6 +1876,140 @@ class MeasureDetector:
                     
         return thickness
     
+    def group_staff_lines_into_systems(self):
+        """Staff line들을 5개씩 그룹화하여 독립적인 staff system으로 구성
+        
+        Returns:
+            list: List of staff systems, each containing 5 staff lines with metadata
+        """
+        if len(self.staff_lines) < 5:
+            return []
+            
+        staff_systems = []
+        
+        # 간격 기반으로 staff line들을 그룹화
+        spacings = []
+        for i in range(len(self.staff_lines) - 1):
+            spacing = self.staff_lines[i+1] - self.staff_lines[i]
+            spacings.append(spacing)
+        
+        if not spacings:
+            return []
+            
+        # 정상적인 staff line 간격 vs staff system 간 간격 구분
+        avg_spacing = np.median(spacings)
+        normal_spacing_threshold = avg_spacing * self.config.staff_system_normal_spacing_ratio  # 같은 system 내 간격
+        
+        # 그룹화
+        current_system = [self.staff_lines[0]]
+        
+        for i in range(1, len(self.staff_lines)):
+            spacing = self.staff_lines[i] - self.staff_lines[i-1]
+            
+            if spacing <= normal_spacing_threshold and len(current_system) < 5:
+                # 같은 staff system 내
+                current_system.append(self.staff_lines[i])
+            else:
+                # 새로운 staff system 시작 또는 현재 시스템 완성
+                if len(current_system) == 5:
+                    # 완성된 5선 시스템 저장
+                    staff_systems.append({
+                        'lines': current_system.copy(),
+                        'top': current_system[0],
+                        'bottom': current_system[-1],
+                        'center_y': (current_system[0] + current_system[-1]) // 2,
+                        'height': current_system[-1] - current_system[0],
+                        'avg_spacing': np.mean([current_system[j+1] - current_system[j] 
+                                               for j in range(len(current_system)-1)])
+                    })
+                
+                current_system = [self.staff_lines[i]]
+        
+        # 마지막 그룹 처리
+        if len(current_system) == 5:
+            staff_systems.append({
+                'lines': current_system.copy(),
+                'top': current_system[0],
+                'bottom': current_system[-1], 
+                'center_y': (current_system[0] + current_system[-1]) // 2,
+                'height': current_system[-1] - current_system[0],
+                'avg_spacing': np.mean([current_system[j+1] - current_system[j] 
+                                       for j in range(len(current_system)-1)])
+            })
+            
+        if self.debug:
+            print(f"Detected {len(staff_systems)} complete staff systems (5 lines each)")
+            for i, system in enumerate(staff_systems):
+                print(f"  System {i+1}: y={system['top']}-{system['bottom']}, "
+                      f"height={system['height']}, spacing={system['avg_spacing']:.1f}")
+        
+        return staff_systems
+    
+    def assign_barlines_to_staff_systems(self, barlines, staff_systems):
+        """Barline들을 해당하는 staff system에 할당
+        
+        Args:
+            barlines (list): List of barline x-coordinates  
+            staff_systems (list): List of staff system metadata
+            
+        Returns:
+            list: List of barlines with assigned staff system info
+        """
+        barlines_with_systems = []
+        
+        for x in barlines:
+            # 이 barline이 어떤 staff system들과 교차하는지 확인
+            intersecting_systems = []
+            
+            for system_idx, system in enumerate(staff_systems):
+                # Barline이 이 staff system과 교차하는지 확인
+                intersects = self.barline_intersects_staff_system(x, system)
+                if intersects:
+                    intersecting_systems.append(system_idx)
+            
+            # 교차하는 모든 staff system에 대해 barline 정보 생성
+            for system_idx in intersecting_systems:
+                system = staff_systems[system_idx]
+                barlines_with_systems.append({
+                    'x': x,
+                    'system_idx': system_idx,
+                    'y_start': system['top'] - 5,  # 약간의 여유
+                    'y_end': system['bottom'] + 5,
+                    'system_height': system['height'],
+                    'staff_lines': system['lines']
+                })
+        
+        if self.debug:
+            print(f"Assigned {len(barlines_with_systems)} barline-system pairs")
+            for bl in barlines_with_systems:
+                print(f"  Barline x={bl['x']} -> System {bl['system_idx']} "
+                      f"(y={bl['y_start']}-{bl['y_end']})")
+        
+        return barlines_with_systems
+    
+    def barline_intersects_staff_system(self, x, staff_system):
+        """특정 barline이 staff system과 교차하는지 확인
+        
+        Args:
+            x (int): Barline x-coordinate
+            staff_system (dict): Staff system metadata
+            
+        Returns:
+            bool: True if barline intersects this staff system
+        """
+        if not hasattr(self, 'binary_img') or self.binary_img is None:
+            return False
+            
+        # Staff system의 각 staff line과 교차하는지 확인
+        intersection_count = 0
+        
+        for staff_y in staff_system['lines']:
+            if self.check_intersection_at_staff(x, staff_y):
+                intersection_count += 1
+        
+        # 5개 staff line 중 최소 3개와 교차해야 유효한 barline
+        return intersection_count >= 3
+
     def _group_staff_lines_exact(self):
         """Group staff lines into systems of exactly 5 lines each.
         
@@ -1316,7 +2233,7 @@ class MeasureDetector:
             # Group staff lines
             current_group = [self.staff_lines[0]]
             for i in range(1, len(self.staff_lines)):
-                if self.staff_lines[i] - current_group[-1] <= avg_spacing * 2.5:
+                if self.staff_lines[i] - current_group[-1] <= avg_spacing * self.config.staff_system_grouping_ratio:
                     current_group.append(self.staff_lines[i])
                 else:
                     if len(current_group) >= 4:  # Need at least 4 lines for valid staff
@@ -1384,13 +2301,33 @@ class MeasureDetector:
         for y in self.staff_lines:
             cv2.line(vis_img, (0, y), (vis_img.shape[1], y), (255, 0, 0), 1)
             
-        # Draw barlines in red
-        for i, x in enumerate(self.barlines):
-            cv2.line(vis_img, (x, 0), (x, vis_img.shape[0]), (0, 0, 255), 2)
-            
-            # Add barline number
-            cv2.putText(vis_img, str(i+1), (x-10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        # Draw barlines in red (within staff system boundaries)
+        if hasattr(self, 'barlines_with_systems') and self.barlines_with_systems:
+            # 새로운 방식: Staff system 범위 내에서만 그리기
+            barline_count = 1
+            for bl in self.barlines_with_systems:
+                x = bl['x']
+                y_start = max(0, bl['y_start'])
+                y_end = min(vis_img.shape[0], bl['y_end'])
+                
+                cv2.line(vis_img, (x, y_start), (x, y_end), (0, 0, 255), 2)
+                
+                # Add barline number (첫 번째 시스템에만)
+                if bl['system_idx'] == 0 or (bl['system_idx'] > 0 and 
+                    not any(b['x'] == x and b['system_idx'] < bl['system_idx'] 
+                           for b in self.barlines_with_systems)):
+                    cv2.putText(vis_img, str(barline_count), (x-10, y_start + 20), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                    barline_count += 1
+                    
+        else:
+            # 기존 방식 (호환성)
+            for i, x in enumerate(self.barlines):
+                cv2.line(vis_img, (x, 0), (x, vis_img.shape[0]), (0, 0, 255), 2)
+                
+                # Add barline number
+                cv2.putText(vis_img, str(i+1), (x-10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
                        
         # Add measure count
         measure_count = self.count_measures()
@@ -1441,7 +2378,8 @@ class MeasureDetector:
             'barlines': barlines,
             'barline_candidates': barline_candidates,
             'staff_lines': [line['y'] if isinstance(line, dict) else line for line in staff_lines],
-            'staff_lines_with_ranges': staff_lines if staff_lines and isinstance(staff_lines[0], dict) else []
+            'staff_lines_with_ranges': staff_lines if staff_lines and isinstance(staff_lines[0], dict) else [],
+            'barlines_with_systems': getattr(self, 'barlines_with_systems', [])
         }
         
         return results
@@ -1488,6 +2426,9 @@ class MeasureDetector:
             'barline_candidates': barline_candidates,
             'staff_lines': [line['y'] if isinstance(line, dict) else line for line in staff_lines],
             'staff_lines_with_ranges': staff_lines if staff_lines and isinstance(staff_lines[0], dict) else [],
+            'barlines_with_systems': getattr(self, 'barlines_with_systems', []),
+            'staff_systems': getattr(self, 'staff_systems', []),
+            'system_groups': self.detect_system_groups() if hasattr(self, 'staff_systems') else [],
             'original_image': img
         }
         
@@ -1501,11 +2442,35 @@ def main():
     parser.add_argument('-d', '--debug', action='store_true', help='Show debug visualizations')
     parser.add_argument('-p', '--page', type=int, default=1, help='Page number for PDF (1-indexed, default: 1)')
     parser.add_argument('--dpi', type=int, default=300, help='DPI for PDF conversion (default: 300)')
+    parser.add_argument('--config-preset', choices=['default', 'strict', 'relaxed'], default='default',
+                       help='Configuration preset: default (balanced), strict (fewer false positives), relaxed (more detection)')
+    parser.add_argument('--top-margin-ratio', type=float, help='Top margin ratio for barline validation (default: 0.7)')
+    parser.add_argument('--bottom-margin-ratio', type=float, help='Bottom margin ratio for barline validation (default: 0.7)')
+    parser.add_argument('--max-extension-ratio', type=float, help='Maximum extension ratio beyond staff (default: 1.2)')
     
     args = parser.parse_args()
     
+    # Create configuration
+    if args.config_preset == 'strict':
+        config = BarlineDetectionConfig.create_strict_config()
+    elif args.config_preset == 'relaxed':
+        config = BarlineDetectionConfig.create_relaxed_config()
+    else:
+        config = BarlineDetectionConfig()
+    
+    # Override with specific parameters if provided
+    if args.top_margin_ratio is not None:
+        config.barline_top_margin_ratio = args.top_margin_ratio
+    if args.bottom_margin_ratio is not None:
+        config.barline_bottom_margin_ratio = args.bottom_margin_ratio
+    if args.max_extension_ratio is not None:
+        config.barline_max_allowed_extension_ratio = args.max_extension_ratio
+    
     # Create detector
-    detector = MeasureDetector(debug=args.debug)
+    detector = MeasureDetector(debug=args.debug, config=config)
+    
+    if args.debug:
+        print(config.get_description())
     
     try:
         # Check if input is PDF or image
