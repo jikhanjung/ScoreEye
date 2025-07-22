@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import os
 import argparse
 import fitz  # PyMuPDF
-from pdf2image import convert_from_path
 import tempfile
 from dataclasses import dataclass
 
@@ -156,20 +155,28 @@ class MeasureDetector:
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
             
-        # Convert PDF page to image
-        images = convert_from_path(pdf_path, dpi=dpi, first_page=page_num+1, last_page=page_num+1)
+        # Open PDF with PyMuPDF
+        pdf_document = fitz.open(pdf_path)
         
-        if not images:
-            raise ValueError(f"Failed to convert PDF page {page_num+1}")
-            
-        # Convert PIL image to numpy array and then to grayscale
-        img_array = np.array(images[0])
+        if page_num >= pdf_document.page_count:
+            pdf_document.close()
+            raise ValueError(f"Page {page_num+1} does not exist in PDF (total pages: {pdf_document.page_count})")
         
-        # Convert to grayscale if needed
-        if len(img_array.shape) == 3:
-            gray_img = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-        else:
-            gray_img = img_array
+        # Get page (0-indexed in PyMuPDF)
+        page = pdf_document[page_num]
+        
+        # Convert to image at specified DPI
+        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        
+        # Convert to numpy array
+        img_data = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)
+        
+        # Close PDF
+        pdf_document.close()
+        
+        # Convert to grayscale
+        gray_img = cv2.cvtColor(img_data, cv2.COLOR_RGB2GRAY)
             
         return gray_img
     

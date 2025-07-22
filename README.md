@@ -1,8 +1,8 @@
 # ScoreEye 🎼👁️
 
-**Automatic Measure Detection in Sheet Music**
+**Automatic Measure Detection and Extraction in Sheet Music**
 
-ScoreEye is an advanced computer vision system that automatically detects and counts measures (bars) in sheet music scores. Built with Python and OpenCV, it provides both command-line tools and a modern desktop GUI for processing PDF and image files.
+ScoreEye is an advanced computer vision system that automatically detects, counts, and extracts individual measures (bars) from sheet music scores. Built with Python and OpenCV, it provides both command-line tools and a modern desktop GUI for processing PDF and image files, with comprehensive measure extraction capabilities for OMR (Optical Music Recognition) pipeline preparation.
 
 ## ✨ Features
 
@@ -11,12 +11,16 @@ ScoreEye is an advanced computer vision system that automatically detects and co
 - **PDF & Image Support** - Process both scanned PDFs and image files
 - **Staff Line Recognition** with horizontal projection analysis
 - **Measure Counting** with high accuracy (85-95% detection rate)
+- **Individual Measure Extraction** - Export each measure as separate PNG image
+- **Comprehensive Metadata Generation** - Detailed JSON files with staff positions and coordinates
 - **Multi-Format Output** with visual overlays and detailed results
 
 ### 🖥️ Desktop GUI
 - **PyQt6-based Interface** with modern, intuitive design
 - **PDF Page Navigation** with zoom and pan controls
 - **Real-time Overlay Visualization** showing detected elements
+- **Measure Box Preview** - Visual confirmation before extraction
+- **One-Click Measure Extraction** directly from GUI
 - **Alternative Preprocessing Options** for different scan qualities
 - **Auto-fit Window Resizing** for optimal viewing experience
 
@@ -53,6 +57,8 @@ python scoreeye_gui.py
 2. **Navigate Pages**: Use the page controls to browse through the score
 3. **Detect Measures**: Click "Detect Measures" to run the analysis
 4. **View Results**: See the overlay with detected barlines and measure count
+5. **Preview Extraction**: Check "Show Measure Boxes" to see extraction boundaries
+6. **Extract Measures**: Click "Extract Measures" to save individual measure images
 
 ### Command Line Usage
 
@@ -69,6 +75,10 @@ python detect_measure.py input.pdf -d
 # Use configuration presets for different score types
 python detect_measure.py quartet.pdf --config-preset strict
 python detect_measure.py orchestra.pdf --config-preset relaxed --consensus-ratio 0.9
+
+# Extract individual measures (NEW - 2025-07-22)
+python extract_measures.py input.pdf --output output/measures --dpi 300
+python extract_measures.py quartet.pdf -p 1 --debug
 ```
 
 ## 🛠️ How It Works
@@ -107,7 +117,8 @@ ScoreEye implements a sophisticated detection pipeline based on HoughLinesP (Pro
 ```
 ScoreEye/
 ├── detect_measure.py      # Core detection algorithms
-├── scoreeye_gui.py       # PyQt6 desktop application
+├── extract_measures.py   # Measure extraction CLI tool (NEW - 2025-07-22)
+├── scoreeye_gui.py       # PyQt6 desktop application with measure extraction
 ├── requirements.txt      # Python dependencies
 ├── CLAUDE.md            # Development notes and guidelines
 ├── CHANGELOG.md         # Version history and changes
@@ -115,9 +126,11 @@ ScoreEye/
 ├── devlog/              # Development analysis documents
 │   ├── 20250721_02_barline_detection_analysis.md
 │   ├── 20250721_03_implementation_issues_analysis.md
-│   └── 20250721_04_hough_transform_implementation_plan.md
+│   ├── 20250721_04_hough_transform_implementation_plan.md
+│   ├── 20250722_03_comprehensive_omr_plan.md
+│   └── 20250722_04_measure_extraction_implementation.md
 ├── pdfs/                # Sample PDF files for testing
-├── output/              # Generated output images
+├── output/              # Generated output images and extracted measures
 └── screenshots/         # Test images and debugging screenshots
 ```
 
@@ -144,6 +157,7 @@ min_intersections=3     # Minimum staff line intersections
 - **Alternative Preprocessing**: Enable for thin line preservation
 - **Overlay Controls**: Toggle staff lines, candidates, final barlines, and system groups
 - **System Group Visualization**: Color-coded clustering for quartet/ensemble scores
+- **Measure Box Preview**: Visual confirmation of extraction boundaries
 - **Configuration Presets**: Quick switching between strict/relaxed/default settings
 
 ## 🧪 Testing

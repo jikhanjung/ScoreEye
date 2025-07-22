@@ -61,6 +61,8 @@ class ScoreImageWidget(QLabel):
         self.show_barlines = True
         self.show_candidates = False
         self.show_system_groups = True  # Show system group clustering
+        self.show_measure_boxes = False  # Show measure bounding boxes
+        self.measure_boxes = []  # List of measure bounding boxes
         self.measure_count = 0
         self.staff_systems = []
         self.system_groups = []
@@ -88,7 +90,7 @@ class ScoreImageWidget(QLabel):
         
     def set_detection_results(self, staff_lines, barlines, measure_count, barline_candidates=None, 
                              staff_lines_with_ranges=None, barlines_with_systems=None,
-                             staff_systems=None, system_groups=None):
+                             staff_systems=None, system_groups=None, measure_boxes=None):
         """Set the detection results for overlay"""
         self.staff_lines = staff_lines
         self.barlines = barlines
@@ -98,6 +100,7 @@ class ScoreImageWidget(QLabel):
         self.barlines_with_systems = barlines_with_systems or []
         self.staff_systems = staff_systems or []
         self.system_groups = system_groups or []
+        self.measure_boxes = measure_boxes or []
         self.update_display()
         
     def set_scale(self, scale_factor):
@@ -332,6 +335,28 @@ class ScoreImageWidget(QLabel):
                     group_label
                 )
                 
+        # Draw measure bounding boxes
+        if self.show_measure_boxes and self.measure_boxes:
+            pen = QPen(QColor(0, 255, 0, 150), 2)  # Green with transparency
+            painter.setPen(pen)
+            font = QFont("Arial", 10)
+            painter.setFont(font)
+            
+            for i, box in enumerate(self.measure_boxes):
+                # Scale coordinates
+                x_scaled = int(box['x'] * self.scale_factor)
+                y_scaled = int(box['y'] * self.scale_factor)
+                width_scaled = int(box['width'] * self.scale_factor)
+                height_scaled = int(box['height'] * self.scale_factor)
+                
+                # Draw rectangle
+                rect = QRect(x_scaled, y_scaled, width_scaled, height_scaled)
+                painter.drawRect(rect)
+                
+                # Draw measure ID
+                measure_id = box.get('measure_id', f'M{i+1}')
+                painter.drawText(x_scaled + 5, y_scaled + 15, measure_id)
+        
         # Draw measure count
         if self.measure_count > 0:
             pen = QPen(QColor(0, 255, 0), 3)  # Green
@@ -499,6 +524,12 @@ class ScoreEyeGUI(QMainWindow):
         self.show_system_groups_cb.toggled.connect(self.toggle_system_groups)
         display_layout.addWidget(self.show_system_groups_cb)
         
+        self.show_measure_boxes_cb = QCheckBox("Show Measure Boxes")
+        self.show_measure_boxes_cb.setChecked(False)
+        self.show_measure_boxes_cb.setToolTip("Preview measure extraction bounding boxes")
+        self.show_measure_boxes_cb.toggled.connect(self.toggle_measure_boxes)
+        display_layout.addWidget(self.show_measure_boxes_cb)
+        
         self.fit_window_btn = QPushButton("Fit to Window")
         self.fit_window_btn.clicked.connect(self.fit_to_window)
         display_layout.addWidget(self.fit_window_btn)
@@ -525,6 +556,12 @@ class ScoreEyeGUI(QMainWindow):
         self.results_label = QLabel("No results yet")
         self.results_label.setWordWrap(True)
         results_layout.addWidget(self.results_label)
+        
+        self.extract_measures_btn = QPushButton("Extract Measures")
+        self.extract_measures_btn.clicked.connect(self.extract_measures)
+        self.extract_measures_btn.setEnabled(False)
+        self.extract_measures_btn.setToolTip("Extract individual measure images")
+        results_layout.addWidget(self.extract_measures_btn)
         
         self.export_btn = QPushButton("Export Results")
         self.export_btn.clicked.connect(self.export_results)
@@ -715,6 +752,11 @@ class ScoreEyeGUI(QMainWindow):
         """Handle detection completion"""
         self.detection_results = results
         
+        # Store binary image for consensus validation
+        if 'original_image' in results:
+            detector = MeasureDetector()
+            self._current_binary_img = detector.preprocess_image(results['original_image'])
+        
         # Update display
         self.image_widget.set_detection_results(
             results['staff_lines'],
@@ -765,6 +807,7 @@ class ScoreEyeGUI(QMainWindow):
         # Re-enable controls
         self.detect_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
+        self.extract_measures_btn.setEnabled(True)  # Enable measure extraction
         self.progress_bar.hide()
         self.status_label.setText("Detection complete!")
         
@@ -848,6 +891,289 @@ class ScoreEyeGUI(QMainWindow):
                                           f"Results exported to:\n{file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", str(e))
+    
+    def toggle_measure_boxes(self, checked):
+        """Toggle measure box display"""
+        self.image_widget.show_measure_boxes = checked
+        if checked and hasattr(self, 'detection_results') and self.detection_results:
+            # Generate measure boxes from current results
+            self.generate_measure_boxes()
+        else:
+            self.image_widget.measure_boxes = []
+        self.image_widget.update_display()
+    
+    def generate_measure_boxes(self):
+        """Generate measure bounding boxes using SYSTEM-SPECIFIC barlines"""
+        if not hasattr(self, 'detection_results') or not self.detection_results:
+            return
+        
+        results = self.detection_results
+        staff_systems = results.get('staff_systems', [])
+        barlines_with_systems = results.get('barlines_with_systems', [])
+        
+        print(f"Debug - Available staff systems: {len(staff_systems)}")
+        print(f"Debug - Barlines with system info: {len(barlines_with_systems)}")
+        
+        if not staff_systems:
+            print("Warning: No staff systems available from GUI")
+            return
+            
+        if not barlines_with_systems:
+            print("Warning: No system-specific barlines available")
+            return
+        
+        # Group barlines by SYSTEM GROUP - barlines_with_systems uses system GROUP index
+        barlines_by_system_group = {}
+        for bl_info in barlines_with_systems:
+            system_group_idx = bl_info.get('system_idx', 0)  # This is actually system GROUP index
+            x = bl_info.get('x', 0)
+            
+            if system_group_idx not in barlines_by_system_group:
+                barlines_by_system_group[system_group_idx] = []
+            barlines_by_system_group[system_group_idx].append(x)
+        
+        print(f"Debug - Barlines by SYSTEM GROUP: {barlines_by_system_group}")
+        
+        # Get system groups to map group index to individual systems
+        system_groups = results.get('system_groups', [])
+        print(f"Debug - System groups: {system_groups}")
+        
+        # Generate measure boxes: Each system group's barlines apply to ALL systems in that group
+        measure_boxes = []
+        
+        # Process each system group and apply its barlines to all systems in the group
+        for group_idx, system_indices in enumerate(system_groups):
+            group_barlines = barlines_by_system_group.get(group_idx, [])
+            if not group_barlines:
+                print(f"Debug - System Group {group_idx}: No barlines, skipping systems {system_indices}")
+                continue
+                
+            group_barlines_sorted = sorted(group_barlines)
+            extended_group_barlines = [0] + group_barlines_sorted
+            
+            print(f"Debug - System Group {group_idx}: barlines {group_barlines_sorted}")
+            print(f"      Applying to systems: {system_indices}")
+            
+            # Apply these barlines to ALL systems in this group
+            for sys_idx in system_indices:
+                if sys_idx >= len(staff_systems):
+                    continue
+                
+                system = staff_systems[sys_idx]
+                print(f"Debug - System {sys_idx} (Group {group_idx}): y={system['top']} to {system['bottom']}")
+                
+                # Create measures for this system using group's barlines
+                system_measure_count = 0
+                for i in range(len(extended_group_barlines) - 1):
+                    x1 = extended_group_barlines[i]
+                    x2 = extended_group_barlines[i + 1]
+                    
+                    # Skip if measure is too narrow
+                    if x2 - x1 < 20:
+                        continue
+                    
+                    system_measure_count += 1
+                    
+                    # Calculate y-range with margin for this system
+                    top = system['top']
+                    bottom = system['bottom']
+                    
+                    # Add margin
+                    avg_spacing = system.get('avg_spacing', 20)
+                    y_margin = int(avg_spacing * 0.5)
+                    y1 = max(0, top - y_margin)
+                    y2 = bottom + y_margin
+                    
+                    # Create measure box for this system
+                    measure_box = {
+                        'x': x1,
+                        'y': y1,
+                        'width': x2 - x1,
+                        'height': y2 - y1,
+                        'measure_id': f'P{self.current_page+1}_{sys_idx:02d}_{system_measure_count:03d}',
+                        'system_index': sys_idx,
+                        'system_group_index': group_idx,
+                        'measure_index': system_measure_count
+                    }
+                    measure_boxes.append(measure_box)
+                    print(f"  Created measure {system_measure_count} for system {sys_idx}: x={x1}-{x2}, y={y1}-{y2}")
+                
+                print(f"Debug - System {sys_idx} total measures: {system_measure_count}")
+        
+        self.image_widget.measure_boxes = measure_boxes
+    
+    def _merge_nearby_barlines(self, barlines, min_distance=50):
+        """Merge barlines that are too close together (likely duplicates)"""
+        if not barlines:
+            return []
+        
+        merged = [barlines[0]]  # Start with first barline
+        
+        for i in range(1, len(barlines)):
+            current = barlines[i]
+            last_merged = merged[-1]
+            
+            # If current barline is far enough from last merged, keep it
+            if current - last_merged >= min_distance:
+                merged.append(current)
+            else:
+                # Replace last merged with average (or keep the one closer to middle)
+                # For simplicity, just keep the first one
+                print(f"    Merging nearby barlines: {last_merged} and {current} (distance: {current - last_merged})")
+        
+        return merged
+    
+    def extract_measures(self):
+        """Extract individual measure images using GUI measure boxes"""
+        if not hasattr(self, 'pdf_path') or not self.pdf_path:
+            QMessageBox.warning(self, "Warning", "Please load a PDF file first.")
+            return
+        
+        if not hasattr(self, 'detection_results') or not self.detection_results:
+            QMessageBox.warning(self, "Warning", "Please run detection first.")
+            return
+        
+        if not hasattr(self.image_widget, 'measure_boxes') or not self.image_widget.measure_boxes:
+            QMessageBox.warning(self, "Warning", "Please generate measure boxes first by checking 'Show Measure Boxes'.")
+            return
+        
+        # Ask for output directory
+        output_dir = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        if not output_dir:
+            return
+        
+        try:
+            from pathlib import Path
+            import fitz
+            import json
+            from datetime import datetime
+            
+            # Create output directory structure
+            output_path = Path(output_dir)
+            page_dir = output_path / f"page_{self.current_page + 1:02d}"
+            page_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Open PDF and get current page
+            pdf_document = fitz.open(self.pdf_path)
+            page = pdf_document[self.current_page]
+            
+            # Convert to image
+            current_dpi = self.dpi_slider.value()
+            mat = fitz.Matrix(current_dpi / 72.0, current_dpi / 72.0)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            img_data = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)
+            page_image = cv2.cvtColor(img_data, cv2.COLOR_RGB2GRAY)
+            
+            # Extract measure images using GUI measure boxes
+            results = self.detection_results
+            measure_boxes = self.image_widget.measure_boxes
+            
+            # Prepare metadata
+            height, width = page_image.shape[:2]
+            page_metadata = {
+                "page_number": self.current_page + 1,
+                "page_dimensions": {"width": width, "height": height},
+                "staff_groups": [],
+                "system_clusters": results.get('system_groups', []),
+                "measures": [],
+                "extracted_at": datetime.now().isoformat(),
+                "barlines_used": results.get('barlines', []),
+                "extraction_method": "GUI_measure_boxes"
+            }
+            
+            # Store staff group information
+            staff_systems = results.get('staff_systems', [])
+            for i, system in enumerate(staff_systems):
+                group_info = {
+                    "group_index": int(i),
+                    "staff_lines": [{"y": int(y), "index": int(j)} for j, y in enumerate(system.get('lines', []))],
+                    "y_range": {
+                        "min": int(system.get('top', 0)),
+                        "max": int(system.get('bottom', 0))
+                    },
+                    "center_y": int(system.get('center_y', 0)),
+                    "height": int(system.get('height', 0))
+                }
+                page_metadata["staff_groups"].append(group_info)
+            
+            # Extract each measure
+            extracted_count = 0
+            for measure_box in measure_boxes:
+                x = measure_box['x']
+                y = measure_box['y']
+                w = measure_box['width']
+                h = measure_box['height']
+                
+                # Extract measure image
+                measure_img = page_image[y:y+h, x:x+w]
+                
+                # Save measure image
+                measure_filename = f"{measure_box['measure_id']}.png"
+                measure_path = page_dir / measure_filename
+                cv2.imwrite(str(measure_path), measure_img)
+                
+                # Calculate staff lines relative to measure (if available)
+                staff_lines_in_measure = []
+                system_idx = measure_box['system_index']
+                if system_idx < len(staff_systems):
+                    system = staff_systems[system_idx]
+                    for j, staff_y in enumerate(system.get('lines', [])):
+                        relative_y = int(staff_y - y)
+                        if 0 <= relative_y < h:
+                            staff_lines_in_measure.append({
+                                "y": int(relative_y),
+                                "original_y": int(staff_y),
+                                "staff_index": int(j),
+                                "group_index": int(system_idx)
+                            })
+                
+                # Store measure metadata
+                measure_info = {
+                    "measure_id": str(measure_box['measure_id']),
+                    "filename": str(measure_filename),
+                    "measure_number": int(measure_box['measure_index']),
+                    "staff_system_index": int(measure_box['system_index']),
+                    "system_group_index": int(measure_box.get('system_group_index', 0)),
+                    "bounding_box_on_page": {
+                        "x": int(x),
+                        "y": int(y),
+                        "width": int(w),
+                        "height": int(h)
+                    },
+                    "staff_line_coordinates_in_measure": staff_lines_in_measure
+                }
+                page_metadata["measures"].append(measure_info)
+                extracted_count += 1
+            
+            # Save page metadata
+            metadata_path = page_dir / "metadata.json"
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(page_metadata, f, indent=2, ensure_ascii=False)
+            
+            # Save overall metadata
+            overall_metadata = {
+                "source_file": os.path.basename(self.pdf_path),
+                "dpi": current_dpi,
+                "total_pages": 1,
+                "processed_pages": [self.current_page + 1],
+                "pages": {str(self.current_page + 1): page_metadata}
+            }
+            
+            overall_metadata_path = output_path / "metadata.json"
+            with open(overall_metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(overall_metadata, f, indent=2, ensure_ascii=False)
+            
+            pdf_document.close()
+            
+            QMessageBox.information(
+                self, "Success", 
+                f"Successfully extracted {extracted_count} measures to:\n{output_dir}\n\n"
+                f"Page directory: {page_dir}\n"
+                f"Metadata files: metadata.json (page and overall)"
+            )
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to extract measures:\n{str(e)}")
 
 
 def main():

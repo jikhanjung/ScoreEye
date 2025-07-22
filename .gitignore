@@ -88,6 +88,7 @@ desktop.ini
 test_images/
 temp_output/
 debug_images/
+output/
 
 # Large PDF files (except samples)
 # Keep essential sample PDFs, ignore large collections

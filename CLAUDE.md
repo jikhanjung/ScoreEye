@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ScoreEye is a computer vision project for automatic measure (bar) detection in sheet music images and PDFs. The project uses Python, OpenCV, and PyQt6 to analyze scanned music scores and count the number of measures by detecting barlines. It provides both a desktop GUI application and command-line tools.
+ScoreEye is a computer vision project for automatic measure (bar) detection in sheet music images and PDFs, with advanced measure extraction capabilities for OMR (Optical Music Recognition) pipeline preparation. The project uses Python, OpenCV, and PyQt6 to analyze scanned music scores, detect barlines with high accuracy, and extract individual measure images with comprehensive metadata. It provides both a desktop GUI application and command-line tools.
 
 ## Architecture
 
-The project implements a sophisticated 9-stage image processing pipeline:
+The project implements a sophisticated 10-stage image processing and extraction pipeline:
 
 1. **Image Preprocessing**: CLAHE enhancement, adaptive thresholding, morphological operations
 2. **Staff Line Detection**: Horizontal projection analysis with peak detection
@@ -19,6 +19,7 @@ The project implements a sophisticated 9-stage image processing pipeline:
 7. **Cluster-Wide Barline Generation**: Create long barlines spanning entire system clusters
 8. **Multi-criteria Scoring**: 0-100 point scoring system for barline candidates
 9. **Visualization**: Color-coded system groups and cluster-wide barlines
+10. **Measure Extraction**: Individual measure image extraction with comprehensive metadata generation
 
 ## Current Implementation Status
 
@@ -40,6 +41,12 @@ The project implements a sophisticated 9-stage image processing pipeline:
 - Original projection-based approach
 - Kept for fallback and comparison testing
 
+**MEASURE EXTRACTION SYSTEM**: Individual measure image generation (2025-07-22)
+- Located in `extract_measures.py` CLI tool and GUI `extract_measures()` method
+- System group-aware processing with consensus-validated barlines only
+- Comprehensive metadata generation including staff positions and coordinate mappings
+- PyMuPDF-only implementation eliminating poppler dependency
+
 ## Development Commands
 
 ```bash
@@ -56,6 +63,10 @@ python detect_measure.py orchestra.pdf --config-preset relaxed --consensus-ratio
 
 # Debug mode for development
 python detect_measure.py sample.pdf -d
+
+# Measure extraction (NEW - 2025-07-22)
+python extract_measures.py input.pdf --output output/measures --dpi 300
+python extract_measures.py quartet.pdf -p 1 --debug
 ```
 
 ## Key Technical Considerations
@@ -65,6 +76,7 @@ python detect_measure.py sample.pdf -d
 - **Best for**: Quartet, ensemble, and orchestral scores with multiple staff systems
 - **Fallback**: HoughLinesP-based detection for single systems
 - **Preprocessing**: Multiple options available (standard Otsu vs. alternative fixed threshold)
+- **Measure Extraction**: Consensus-validated barlines only, system group-aware processing
 
 ### Critical Implementation Details
 - **System Clustering**: Jump detection algorithm automatically identifies quartet/ensemble groups
@@ -95,7 +107,8 @@ When debug=True, the system outputs:
 ```
 ScoreEye/
 ├── detect_measure.py      # Core detection algorithms (MeasureDetector class)
-├── scoreeye_gui.py       # PyQt6 desktop application (ScoreEyeGUI class)  
+├── extract_measures.py   # Measure extraction CLI tool (NEW - 2025-07-22)
+├── scoreeye_gui.py       # PyQt6 desktop application with measure extraction (ScoreEyeGUI class)  
 ├── requirements.txt      # Python dependencies
 ├── CLAUDE.md            # This guidance file
 ├── CHANGELOG.md         # Version history
@@ -104,9 +117,12 @@ ScoreEye/
 │   ├── 20250721_02_barline_detection_analysis.md    # Root cause analysis
 │   ├── 20250721_03_implementation_issues_analysis.md # Parameter fixes  
 │   ├── 20250721_04_hough_transform_implementation_plan.md # HoughLinesP plan
-│   └── 20250721_06_multi_system_consensus_validation.md # Multi-system consensus
+│   ├── 20250721_06_multi_system_consensus_validation.md # Multi-system consensus
+│   ├── 20250722_02_object_detection_plan.md # OMR object detection planning
+│   ├── 20250722_03_comprehensive_omr_plan.md # Complete OMR implementation plan
+│   └── 20250722_04_measure_extraction_implementation.md # Measure extraction completion
 ├── pdfs/                # Test PDF files
-├── output/              # Generated visualization images
+├── output/              # Generated visualization images and extracted measures
 └── screenshots/         # Debug and test images
 ```
 

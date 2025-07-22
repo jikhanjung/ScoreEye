@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2025-07-22
+
+#### 🎼 Measure Extraction System (Phase 1.1 of OMR Pipeline)
+- **CLI Tool: `extract_measures.py`**: Complete command-line utility for batch measure extraction from PDF files
+- **GUI Integration**: Seamless measure extraction directly from GUI with visual preview
+- **System Group-Aware Processing**: Proper handling of quartet/ensemble system groups with group-specific barlines
+- **Comprehensive Metadata Generation**: Detailed JSON metadata including staff positions, bounding boxes, and coordinate mappings
+- **PyMuPDF-Only Implementation**: Eliminated poppler dependency for simplified installation
+
+#### 🔧 Measure Box Preview System
+- **"Show Measure Boxes" Checkbox**: Real-time visual preview of measure boundaries before extraction
+- **Color-Coded Visualization**: Green bounding boxes overlay on detected measures
+- **System-Specific Processing**: Each staff system processed independently with appropriate barlines
+- **Interactive Validation**: Visual confirmation of measure detection accuracy before export
+
+#### 📊 Advanced Metadata Structure
+- **Page-Level Metadata**: Complete page information with dimensions and processing details
+- **System Group Information**: Staff line coordinates and system clustering data
+- **Measure-Specific Data**: Individual measure metadata with relative coordinate mapping
+- **Extraction Traceability**: Full audit trail of detection and extraction process
+
+#### 🚀 Production-Ready Export Pipeline
+- **Standardized Directory Structure**: `output/page_XX/` with consistent naming conventions
+- **High-Quality PNG Output**: Individual measure images with preserved detail
+- **JSON Serialization**: Robust metadata export with proper type conversion
+- **Batch Processing**: Multiple page and multiple PDF support
+
 ### Added - 2025-07-21
 
 #### 🎼 Multi-System Consensus Validation & System Clustering
