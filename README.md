@@ -8,10 +8,11 @@ ScoreEye is an advanced computer vision system that automatically detects, count
 
 ### 🎯 Core Capabilities
 - **Automatic Barline Detection** using state-of-the-art HoughLinesP algorithm
+- **Square Bracket Detection** with 3-phase hybrid approach (92% accuracy improvement)
 - **PDF & Image Support** - Process both scanned PDFs and image files
 - **Staff Line Recognition** with horizontal projection analysis
 - **Measure Counting** with high accuracy (85-95% detection rate)
-- **Individual Measure Extraction** - Export each measure as separate PNG image
+- **Individual Measure Extraction** - Export each measure as separate PNG image with optimized boundaries
 - **Comprehensive Metadata Generation** - Detailed JSON files with staff positions and coordinates
 - **Multi-Format Output** with visual overlays and detailed results
 
@@ -19,19 +20,23 @@ ScoreEye is an advanced computer vision system that automatically detects, count
 - **PyQt6-based Interface** with modern, intuitive design
 - **PDF Page Navigation** with zoom and pan controls
 - **Real-time Overlay Visualization** showing detected elements
-- **Measure Box Preview** - Visual confirmation before extraction
+- **Bracket Visualization** - Dual display modes for candidates and verified brackets
+- **Measure Box Preview** - Visual confirmation before extraction with optimized Y-ranges
 - **One-Click Measure Extraction** directly from GUI
 - **Alternative Preprocessing Options** for different scan qualities
 - **Auto-fit Window Resizing** for optimal viewing experience
 
 ### 🔬 Advanced Detection System
-- **7-Stage Detection Pipeline** with progressive filtering
+- **12-Stage Detection Pipeline** with progressive filtering
 - **Multi-System Consensus Validation** for quartet/ensemble scores
+- **3-Phase Square Bracket Detection** with HoughLinesP + template matching
+- **Advanced 2-Stage Clustering** to merge thick brackets (36 duplicates → 3 accurate)
 - **Adaptive System Clustering** using jump detection algorithm
 - **Intelligent Scoring System** (0-100 points) for barline candidates
 - **Automatic Parameter Tuning** based on image characteristics
 - **Staff Intersection Validation** for high precision
 - **Cluster-Wide Barline Visualization** spanning entire system groups
+- **Optimized Measure Y-Range Calculation** using adjacent system gap analysis
 
 ## 🚀 Quick Start
 
@@ -128,7 +133,9 @@ ScoreEye/
 │   ├── 20250721_03_implementation_issues_analysis.md
 │   ├── 20250721_04_hough_transform_implementation_plan.md
 │   ├── 20250722_03_comprehensive_omr_plan.md
-│   └── 20250722_04_measure_extraction_implementation.md
+│   ├── 20250722_04_measure_extraction_implementation.md
+│   ├── 20250722_05_bracket_detection_plan.md
+│   └── 20250722_06_bracket_detection_and_measure_optimization.md
 ├── pdfs/                # Sample PDF files for testing
 ├── output/              # Generated output images and extracted measures
 └── screenshots/         # Test images and debugging screenshots

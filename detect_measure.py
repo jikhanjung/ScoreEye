@@ -122,6 +122,7 @@ class MeasureDetector:
         self.staff_lines = []
         self.barlines = []
         self.binary_img = None
+        self.detected_brackets = []  # Store detected bracket information
         
     def load_image(self, image_path):
         """Load and return the image in grayscale.
@@ -2427,6 +2428,12 @@ class MeasureDetector:
         # Count measures
         measure_count = self.count_measures()
         
+        # Detect brackets (after staff systems are available)
+        brackets = []
+        if hasattr(self, 'staff_systems') and self.staff_systems:
+            brackets = self.detect_brackets(binary)
+            print(f"Detected {len(brackets)} brackets")
+        
         results = {
             'measure_count': measure_count,
             'barlines': barlines,
@@ -2436,10 +2443,538 @@ class MeasureDetector:
             'barlines_with_systems': getattr(self, 'barlines_with_systems', []),
             'staff_systems': getattr(self, 'staff_systems', []),
             'system_groups': self.detect_system_groups() if hasattr(self, 'staff_systems') else [],
+            'detected_brackets': brackets,
+            'bracket_candidates': getattr(self, 'bracket_candidates', []),
             'original_image': img
         }
         
         return results
+
+    # ============================================================================
+    # BRACKET DETECTION METHODS (Phase 1-3 implementation)
+    # ============================================================================
+    
+    def detect_brackets(self, binary_img):
+        """
+        Detect square brackets that group staff systems.
+        Implements the 3-phase hybrid approach from devlog/20250722_05_bracket_detection_plan.md
+        
+        Args:
+            binary_img: Binary image (preprocessed)
+            
+        Returns:
+            list: List of detected bracket information dictionaries
+        """
+        if not hasattr(self, 'staff_systems') or not self.staff_systems:
+            if self.debug:
+                print("Warning: No staff systems available for bracket detection")
+            return []
+        
+        # Phase 1: Find vertical bracket candidates using HoughLinesP
+        vertical_candidates = self._find_vertical_bracket_candidates(binary_img)
+        
+        if self.debug:
+            print(f"Found {len(vertical_candidates)} vertical line candidates")
+            if vertical_candidates:
+                print(f"Phase 1 - First candidate type: {type(vertical_candidates[0])}, value: {vertical_candidates[0]}")
+        
+        # Phase 2: Verify bracket corners using template matching (simplified for now)
+        verified_brackets = self._verify_bracket_candidates(binary_img, vertical_candidates)
+        
+        if self.debug:
+            print(f"Verified {len(verified_brackets)} brackets after corner verification")
+            if verified_brackets:
+                print(f"Phase 2 - First verified type: {type(verified_brackets[0])}, value: {verified_brackets[0]}")
+        
+        # Phase 2.5: Cluster nearby brackets (merge thick brackets detected as multiple lines)
+        clustered_brackets = self._cluster_brackets_by_proximity(verified_brackets)
+        
+        if self.debug:
+            print(f"Clustered to {len(clustered_brackets)} unique brackets after proximity grouping")
+        
+        # Phase 3: Extract bracket information and map to staff systems
+        bracket_info = self._extract_bracket_information(clustered_brackets)
+        
+        # Store results
+        self.detected_brackets = bracket_info
+        # Ensure bracket_candidates only contains raw coordinates [x1, y1, x2, y2]
+        self.bracket_candidates = []
+        for candidate in vertical_candidates:
+            if isinstance(candidate, (list, tuple)) and len(candidate) == 4:
+                self.bracket_candidates.append(candidate)
+        
+        if self.debug:
+            print(f"Stored bracket_candidates (raw coords) count: {len(self.bracket_candidates)}")
+            if self.bracket_candidates:
+                print(f"First bracket_candidate: {self.bracket_candidates[0]}")
+            print(f"Final bracket detection results:")
+            for i, bracket in enumerate(bracket_info):
+                print(f"  Bracket {i}: x={bracket['x']}, y_range=({bracket['y_start']}-{bracket['y_end']}), systems={bracket['covered_staff_system_indices']}")
+        
+        return bracket_info
+    
+    def calculate_optimal_measure_y_range(self, system, all_systems, page_height):
+        """
+        Calculate optimal Y range for measures in a system, considering adjacent systems
+        
+        Args:
+            system: Current system dict with 'top', 'bottom', 'height'
+            all_systems: List of all systems on the page (sorted by Y position)
+            page_height: Total page height for boundary systems
+            
+        Returns:
+            tuple: (y_start, y_end) for optimal measure range
+        """
+        current_top = system['top']
+        current_bottom = system['bottom'] 
+        current_height = system['height']
+        
+        # Find system index in all_systems
+        system_idx = -1
+        for i, sys in enumerate(all_systems):
+            if sys['top'] == current_top and sys['bottom'] == current_bottom:
+                system_idx = i
+                break
+        
+        if system_idx == -1:
+            # Fallback: use basic margin
+            margin = int(current_height * 0.3)
+            return max(0, current_top - margin), min(page_height, current_bottom + margin)
+        
+        # Calculate Y range based on position
+        y_start = current_top
+        y_end = current_bottom
+        
+        # Check above (previous system)
+        if system_idx > 0:
+            prev_system = all_systems[system_idx - 1]
+            gap_above = current_top - prev_system['bottom']
+            # Use half of the gap above
+            y_start = current_top - int(gap_above * 0.5)
+            if hasattr(self, 'debug') and self.debug:
+                print(f"    System {system_idx}: Gap above = {gap_above}px, using {int(gap_above * 0.5)}px")
+        else:
+            # Top system: extend upward by 100% of system height
+            extension = int(current_height * 1.0)  # 100% of system height
+            y_start = max(0, current_top - extension)
+            if hasattr(self, 'debug') and self.debug:
+                print(f"    System {system_idx} (TOP): Extending upward by {extension}px")
+        
+        # Check below (next system) 
+        if system_idx < len(all_systems) - 1:
+            next_system = all_systems[system_idx + 1]
+            gap_below = next_system['top'] - current_bottom
+            # Use half of the gap below
+            y_end = current_bottom + int(gap_below * 0.5)
+            if hasattr(self, 'debug') and self.debug:
+                print(f"    System {system_idx}: Gap below = {gap_below}px, using {int(gap_below * 0.5)}px")
+        else:
+            # Bottom system: extend downward by 100% of system height
+            extension = int(current_height * 1.0)  # 100% of system height
+            y_end = min(page_height, current_bottom + extension)
+            if hasattr(self, 'debug') and self.debug:
+                print(f"    System {system_idx} (BOTTOM): Extending downward by {extension}px")
+        
+        if hasattr(self, 'debug') and self.debug:
+            old_margin = int(current_height * 0.3)
+            old_y1, old_y2 = max(0, current_top - old_margin), min(page_height, current_bottom + old_margin)
+            print(f"    Y range optimization: {old_y1}-{old_y2} → {y_start}-{y_end} (height: {old_y2-old_y1} → {y_end-y_start})")
+        
+        return int(y_start), int(y_end)
+    
+    def _find_vertical_bracket_candidates(self, binary_img):
+        """
+        Phase 1: Find vertical line candidates in the left ROI using HoughLinesP
+        
+        Args:
+            binary_img: Binary image
+            
+        Returns:
+            list: List of vertical line candidates as [x1, y1, x2, y2]
+        """
+        height, width = binary_img.shape
+        
+        # 1.1. Set ROI - left 15% of image, full height range of staff systems
+        all_staff_y = []
+        for system in self.staff_systems:
+            all_staff_y.extend(system.get('lines', []))
+        
+        if not all_staff_y:
+            if self.debug:
+                print("Warning: No staff lines found for ROI calculation")
+            return []
+        
+        roi_x_end = int(width * 0.15)  # Left 15% of image
+        roi_y_start = max(0, int(min(all_staff_y)) - 50)  # 50px margin above top staff
+        roi_y_end = min(height, int(max(all_staff_y)) + 50)  # 50px margin below bottom staff
+        
+        # Extract ROI
+        roi = binary_img[roi_y_start:roi_y_end, 0:roi_x_end]
+        
+        if self.debug:
+            print(f"ROI for bracket detection: x=0-{roi_x_end}, y={roi_y_start}-{roi_y_end}")
+            print(f"ROI size: {roi.shape}")
+        
+        # 1.2. Calculate dynamic parameters
+        if not self.staff_systems:
+            return []
+        
+        # Calculate minimum height: 1.5 times the smallest staff system height
+        min_heights = []
+        avg_spacings = []
+        for system in self.staff_systems:
+            if 'height' in system:
+                min_heights.append(system['height'])
+            if 'avg_spacing' in system:
+                avg_spacings.append(system['avg_spacing'])
+        
+        if min_heights:
+            min_line_length = int(min(min_heights) * 1.5)
+        else:
+            min_line_length = int((roi_y_end - roi_y_start) * 0.3)  # Fallback: 30% of ROI height
+        
+        if avg_spacings:
+            max_line_gap = int(np.mean(avg_spacings) * 0.5)
+        else:
+            max_line_gap = 10  # Fallback value
+        
+        if self.debug:
+            print(f"HoughLinesP parameters: minLineLength={min_line_length}, maxLineGap={max_line_gap}")
+        
+        # 1.3. Apply HoughLinesP
+        lines = cv2.HoughLinesP(
+            roi,
+            rho=1,
+            theta=np.pi / 180,
+            threshold=80,
+            minLineLength=min_line_length,
+            maxLineGap=max_line_gap
+        )
+        
+        # 1.4. Filter for vertical lines (88-92 degrees)
+        vertical_candidates = []
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                
+                # Convert back to full image coordinates
+                x1_full = x1
+                y1_full = y1 + roi_y_start
+                x2_full = x2  
+                y2_full = y2 + roi_y_start
+                
+                # Calculate angle
+                if x2_full != x1_full:
+                    angle = abs(np.arctan2(y2_full - y1_full, x2_full - x1_full) * 180 / np.pi)
+                else:
+                    angle = 90  # Perfect vertical line
+                
+                # Filter for near-vertical lines
+                if 88 <= angle <= 92:
+                    vertical_candidates.append([x1_full, y1_full, x2_full, y2_full])
+                    
+                    if self.debug:
+                        print(f"  Vertical candidate: ({x1_full}, {y1_full})-({x2_full}, {y2_full}), angle={angle:.1f}°")
+        
+        return vertical_candidates
+    
+    def _verify_bracket_candidates(self, binary_img, vertical_candidates):
+        """
+        Phase 2: Verify bracket candidates by checking for horizontal elements
+        (Simplified version - full template matching would require actual templates)
+        
+        Args:
+            binary_img: Binary image
+            vertical_candidates: List of vertical line candidates
+            
+        Returns:
+            list: List of verified bracket candidates
+        """
+        verified_brackets = []
+        
+        for candidate in vertical_candidates:
+            x1, y1, x2, y2 = candidate
+            
+            # Ensure y1 is top, y2 is bottom
+            if y1 > y2:
+                y1, y2 = y2, y1
+                x1, x2 = x2, x1
+            
+            # For simplified verification, check for horizontal elements near the endpoints
+            has_top_horizontal = self._check_horizontal_element(binary_img, x1, y1, direction='top')
+            has_bottom_horizontal = self._check_horizontal_element(binary_img, x2, y2, direction='bottom')
+            
+            # A bracket should have both top and bottom horizontal elements
+            if has_top_horizontal and has_bottom_horizontal:
+                verified_brackets.append(candidate)
+                
+                if self.debug:
+                    print(f"  Verified bracket: ({x1}, {y1})-({x2}, {y2})")
+            elif self.debug:
+                print(f"  Rejected candidate: ({x1}, {y1})-({x2}, {y2}) - missing horizontal elements")
+        
+        return verified_brackets
+    
+    def _check_horizontal_element(self, binary_img, x, y, direction='top'):
+        """
+        Check for horizontal elements near a point (simplified bracket corner detection)
+        
+        Args:
+            binary_img: Binary image
+            x, y: Point coordinates
+            direction: 'top' or 'bottom'
+            
+        Returns:
+            bool: True if horizontal element found
+        """
+        height, width = binary_img.shape
+        
+        # Define search area around the point
+        search_size = 15
+        x_start = max(0, x - 5)
+        x_end = min(width, x + search_size)
+        y_start = max(0, y - search_size//2)
+        y_end = min(height, y + search_size//2)
+        
+        # Extract search region
+        search_region = binary_img[y_start:y_end, x_start:x_end]
+        
+        if search_region.size == 0:
+            return False
+        
+        # Look for horizontal lines using simple morphological operations
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (8, 1))
+        horizontal_elements = cv2.morphologyEx(search_region, cv2.MORPH_OPEN, horizontal_kernel)
+        
+        # Check if we found any horizontal elements
+        horizontal_pixels = np.sum(horizontal_elements > 0)
+        threshold = 5  # Minimum number of horizontal pixels
+        
+        return horizontal_pixels >= threshold
+    
+    def _cluster_brackets_by_proximity(self, verified_brackets):
+        """
+        Cluster nearby bracket candidates to merge thick brackets detected as multiple lines
+        Only merges brackets that are close in X AND have continuous Y ranges (no gaps)
+        
+        Args:
+            verified_brackets: List of verified bracket candidates [x1, y1, x2, y2]
+            
+        Returns:
+            list: List of clustered (merged) bracket candidates
+        """
+        if not verified_brackets:
+            return []
+        
+        if self.debug:
+            print(f"  Clustering {len(verified_brackets)} bracket candidates")
+            print(f"  Logic: Similar X coordinates (50px) + continuous Y ranges (100px gap) = same bracket")
+        
+        # Use simple X proximity clustering (ignoring Y gaps)
+        clustered = self._cluster_brackets_by_x_proximity(verified_brackets, x_tolerance=50)
+        
+        if self.debug:
+            print(f"  Final bracket clustering: {len(clustered)} unique brackets")
+            for i, cluster in enumerate(clustered):
+                print(f"    Bracket {i}: x_avg={int((cluster[0] + cluster[2])/2)}, y_range=({cluster[1]}-{cluster[3]})")
+        
+        return clustered
+    
+    def _cluster_brackets_by_x_proximity(self, brackets, x_tolerance=20):
+        """
+        Helper method to cluster brackets by X coordinate proximity
+        Brackets with similar X coordinates AND continuous Y ranges are merged
+        If Y ranges have gaps, they remain separate brackets
+        """
+        if not brackets:
+            return []
+        
+        # Sort brackets by X coordinate first, then by Y coordinate
+        sorted_brackets = sorted(brackets, key=lambda b: ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
+        
+        # First group by X coordinate
+        x_groups = []
+        current_x_group = [sorted_brackets[0]]
+        x_tolerance = 50  # Similar X position tolerance
+        
+        for bracket in sorted_brackets[1:]:
+            current_x = (bracket[0] + bracket[2]) / 2
+            group_x = (current_x_group[0][0] + current_x_group[0][2]) / 2
+            
+            if abs(current_x - group_x) <= x_tolerance:
+                # Similar X - add to current group
+                current_x_group.append(bracket)
+            else:
+                # Different X - start new group
+                x_groups.append(current_x_group)
+                current_x_group = [bracket]
+        
+        x_groups.append(current_x_group)  # Don't forget last group
+        
+        if self.debug:
+            print(f"    Found {len(x_groups)} X-coordinate groups")
+        
+        # Now within each X group, cluster by Y continuity
+        clustered = []
+        for group_idx, x_group in enumerate(x_groups):
+            if self.debug:
+                print(f"    Processing X-group {group_idx} with {len(x_group)} brackets")
+            
+            # Sort by Y coordinate within the group
+            y_sorted = sorted(x_group, key=lambda b: (b[1] + b[3]) / 2)
+            
+            # Cluster by Y continuity
+            y_clusters = []
+            current_y_cluster = [y_sorted[0]]
+            
+            for bracket in y_sorted[1:]:
+                # Check Y continuity with current cluster
+                if self._brackets_y_continuous(current_y_cluster, bracket, y_gap_tolerance=100):
+                    current_y_cluster.append(bracket)
+                    if self.debug:
+                        bracket_y = (bracket[1] + bracket[3]) / 2
+                        print(f"      Y-continuous: adding bracket at y={int(bracket_y)}")
+                else:
+                    # Y gap detected - start new cluster
+                    y_clusters.append(current_y_cluster)
+                    current_y_cluster = [bracket]
+                    if self.debug:
+                        bracket_y = (bracket[1] + bracket[3]) / 2
+                        print(f"      Y-gap detected: starting new cluster at y={int(bracket_y)}")
+            
+            y_clusters.append(current_y_cluster)  # Don't forget last cluster
+            
+            # Merge each Y cluster
+            for y_cluster in y_clusters:
+                merged_bracket = self._merge_bracket_cluster(y_cluster)
+                clustered.append(merged_bracket)
+        
+        return clustered
+    
+    def _brackets_y_continuous(self, current_cluster, new_bracket, y_gap_tolerance=100):
+        """
+        Check if a new bracket has continuous Y range with current cluster
+        
+        Args:
+            current_cluster: List of brackets already in cluster
+            new_bracket: New bracket to check [x1, y1, x2, y2]
+            y_gap_tolerance: Maximum Y gap allowed between brackets
+            
+        Returns:
+            bool: True if Y ranges are continuous (overlapping or close)
+        """
+        # Get Y range of new bracket
+        new_y_start = min(new_bracket[1], new_bracket[3])
+        new_y_end = max(new_bracket[1], new_bracket[3])
+        
+        # Get Y range of current cluster
+        cluster_y_coords = []
+        for bracket in current_cluster:
+            cluster_y_coords.extend([bracket[1], bracket[3]])
+        
+        cluster_y_start = min(cluster_y_coords)
+        cluster_y_end = max(cluster_y_coords)
+        
+        # Check for overlap or proximity
+        # Brackets are continuous if they overlap or gap is small
+        y_gap = max(0, max(new_y_start - cluster_y_end, cluster_y_start - new_y_end))
+        
+        is_continuous = y_gap <= y_gap_tolerance
+        
+        if self.debug:
+            print(f"        Y continuity check: cluster({cluster_y_start}-{cluster_y_end}) vs new({new_y_start}-{new_y_end}), gap={y_gap}, continuous={is_continuous}")
+        
+        return is_continuous
+    
+    def _brackets_similar(self, bracket1, bracket2, tolerance=30):
+        """Check if two brackets are similar (for detecting used brackets)"""
+        x1_avg = (bracket1[0] + bracket1[2]) / 2
+        x2_avg = (bracket2[0] + bracket2[2]) / 2
+        y1_avg = (bracket1[1] + bracket1[3]) / 2
+        y2_avg = (bracket2[1] + bracket2[3]) / 2
+        
+        return (abs(x1_avg - x2_avg) <= tolerance and abs(y1_avg - y2_avg) <= tolerance)
+    
+    def _merge_bracket_cluster(self, bracket_cluster):
+        """
+        Merge multiple bracket candidates in a cluster into a single representative bracket
+        
+        Args:
+            bracket_cluster: List of bracket candidates [x1, y1, x2, y2] to merge
+            
+        Returns:
+            list: Single merged bracket [x1, y1, x2, y2]
+        """
+        if len(bracket_cluster) == 1:
+            return bracket_cluster[0]
+        
+        # Calculate average/representative coordinates
+        x_coords = []
+        y_coords = []
+        
+        for bracket in bracket_cluster:
+            x1, y1, x2, y2 = bracket
+            x_coords.extend([x1, x2])
+            y_coords.extend([y1, y2])
+        
+        # Use median for more robust merging
+        avg_x = int(np.median(x_coords))
+        min_y = int(min(y_coords))
+        max_y = int(max(y_coords))
+        
+        # Return merged bracket as [x, min_y, x, max_y] (vertical line format)
+        return [avg_x, min_y, avg_x, max_y]
+    
+    def _extract_bracket_information(self, verified_brackets):
+        """
+        Phase 3: Extract bracket information and map to staff systems
+        
+        Args:
+            verified_brackets: List of verified bracket candidates
+            
+        Returns:
+            list: List of bracket information dictionaries
+        """
+        bracket_info = []
+        
+        for bracket in verified_brackets:
+            x1, y1, x2, y2 = bracket
+            
+            # Calculate bracket properties
+            bracket_x = int((x1 + x2) / 2)
+            bracket_y_start = min(y1, y2)
+            bracket_y_end = max(y1, y2)
+            
+            # Find staff systems covered by this bracket
+            covered_systems = []
+            for i, system in enumerate(self.staff_systems):
+                system_top = system.get('top', 0)
+                system_bottom = system.get('bottom', 0)
+                
+                # Check if system is within bracket's Y range (with some tolerance)
+                tolerance = 20  # pixels
+                if (bracket_y_start - tolerance <= system_top <= bracket_y_end + tolerance and
+                    bracket_y_start - tolerance <= system_bottom <= bracket_y_end + tolerance):
+                    covered_systems.append(i)
+            
+            # Create bracket information dictionary
+            bracket_data = {
+                'type': 'bracket',
+                'x': bracket_x,
+                'y_start': int(bracket_y_start),
+                'y_end': int(bracket_y_end),
+                'bounding_box': {
+                    'x': bracket_x,
+                    'y_start': int(bracket_y_start), 
+                    'y_end': int(bracket_y_end)
+                },
+                'covered_staff_system_indices': covered_systems,
+                'raw_coordinates': [int(x1), int(y1), int(x2), int(y2)]
+            }
+            
+            bracket_info.append(bracket_data)
+        
+        return bracket_info
 
 
 def main():

@@ -8,7 +8,7 @@ ScoreEye is a computer vision project for automatic measure (bar) detection in s
 
 ## Architecture
 
-The project implements a sophisticated 10-stage image processing and extraction pipeline:
+The project implements a sophisticated 12-stage image processing and extraction pipeline:
 
 1. **Image Preprocessing**: CLAHE enhancement, adaptive thresholding, morphological operations
 2. **Staff Line Detection**: Horizontal projection analysis with peak detection
@@ -17,18 +17,25 @@ The project implements a sophisticated 10-stage image processing and extraction 
 5. **Per-System Barline Detection**: HoughLinesP detection within each system's ROI
 6. **Multi-System Consensus Validation**: Only barlines detected in 80%+ of systems are valid
 7. **Cluster-Wide Barline Generation**: Create long barlines spanning entire system clusters
-8. **Multi-criteria Scoring**: 0-100 point scoring system for barline candidates
-9. **Visualization**: Color-coded system groups and cluster-wide barlines
-10. **Measure Extraction**: Individual measure image extraction with comprehensive metadata generation
+8. **Square Bracket Detection**: 3-phase hybrid detection (HoughLinesP + template matching + clustering)
+9. **Bracket-System Mapping**: Associate brackets with covered staff system indices
+10. **Multi-criteria Scoring**: 0-100 point scoring system for barline candidates
+11. **Advanced Visualization**: Color-coded system groups, barlines, and bracket candidates/verified brackets
+12. **Optimized Measure Extraction**: Individual measure images with bracket-based starting points and optimized Y-ranges
 
 ## Current Implementation Status
 
-**PRIMARY ALGORITHM**: Multi-System Consensus Validation (2025-07-21)
-- Located in `detect_barlines_per_system()` + `validate_barlines_with_consensus()` methods
-- **Implementation based on**: `devlog/20250721_04_hough_transform_implementation_plan.md`
-- 85-95% detection rate for quartet/ensemble scores
+**PRIMARY ALGORITHM**: Multi-System Consensus Validation + Square Bracket Detection (2025-07-22)
+- **Barline Detection**: Located in `detect_barlines_per_system()` + `validate_barlines_with_consensus()` methods
+- **Bracket Detection**: Located in `detect_brackets()` method with 3-phase pipeline
+- **Implementation based on**: 
+  - Barlines: `devlog/20250721_04_hough_transform_implementation_plan.md`
+  - Brackets: `devlog/20250722_05_bracket_detection_plan.md`
+- 85-95% barline detection rate for quartet/ensemble scores
+- 92% accuracy improvement in bracket detection (36 duplicates → 3 accurate detections)
 - Adaptive system clustering using jump detection algorithm  
 - Cluster-wide barline visualization spanning entire system groups
+- Real-time bracket visualization with candidate and verified overlays
 - Configurable consensus thresholds (default: 80% agreement required)
 
 **SECONDARY ALGORITHM**: HoughLinesP-based detection
@@ -41,8 +48,13 @@ The project implements a sophisticated 10-stage image processing and extraction 
 - Original projection-based approach
 - Kept for fallback and comparison testing
 
-**MEASURE EXTRACTION SYSTEM**: Individual measure image generation (2025-07-22)
+**MEASURE EXTRACTION SYSTEM**: Individual measure image generation with optimizations (2025-07-22)
 - Located in `extract_measures.py` CLI tool and GUI `extract_measures()` method
+- **Bracket-Based Starting Points**: First measures begin from bracket X-coordinate instead of X=0
+- **Optimized Y-Range Calculation**: `calculate_optimal_measure_y_range()` method
+  - Adjacent system gap sharing (50% above + 50% below)
+  - Boundary system extension (75% of system height)
+  - 2-3x larger measure height for complete note preservation (40-60px → 120-200px)
 - System group-aware processing with consensus-validated barlines only
 - Comprehensive metadata generation including staff positions and coordinate mappings
 - PyMuPDF-only implementation eliminating poppler dependency

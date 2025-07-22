@@ -117,6 +117,12 @@ def extract_measures_from_page(detector, page_image, page_num, output_dir, debug
         }
         metadata["staff_groups"].append(group_info)
     
+    # Get bracket information for measure start positions
+    brackets = []
+    if hasattr(detector, 'detected_brackets') and detector.detected_brackets:
+        brackets = detector.detected_brackets
+        print(f"  Found {len(brackets)} brackets for measure start positions")
+    
     # Extract measures using SYSTEM GROUP approach (same as GUI)
     extracted_count = 0
     
@@ -128,7 +134,18 @@ def extract_measures_from_page(detector, page_image, page_num, output_dir, debug
             continue
             
         group_barlines_sorted = sorted(group_barlines)
-        extended_group_barlines = [0] + group_barlines_sorted
+        
+        # Find bracket X coordinate for this system group as measure start
+        bracket_x = 0  # Default fallback
+        for bracket in brackets:
+            bracket_systems = bracket.get('covered_staff_system_indices', [])
+            # Check if this bracket covers systems in current group
+            if any(sys_idx in bracket_systems for sys_idx in system_indices):
+                bracket_x = bracket.get('x', 0)
+                print(f"  System Group {group_idx}: Using bracket at x={bracket_x} as measure start")
+                break
+        
+        extended_group_barlines = [bracket_x] + group_barlines_sorted
         
         print(f"  System Group {group_idx}: barlines {group_barlines_sorted}")
         print(f"    Applying to systems: {system_indices}")
@@ -153,15 +170,10 @@ def extract_measures_from_page(detector, page_image, page_num, output_dir, debug
                 
                 system_measure_count += 1
                 
-                # Calculate y-range with margin for this system
-                top = system['top']
-                bottom = system['bottom']
-                
-                # Add margin
-                avg_spacing = system.get('avg_spacing', 20)
-                y_margin = int(avg_spacing * 0.5)
-                y1 = max(0, int(top - y_margin))
-                y2 = min(height, int(bottom + y_margin))
+                # Calculate optimal Y range considering adjacent systems
+                y1, y2 = detector.calculate_optimal_measure_y_range(
+                    system, staff_systems, height
+                )
                 
                 # Extract measure image
                 measure_img = page_image[y1:y2, x1:x2]

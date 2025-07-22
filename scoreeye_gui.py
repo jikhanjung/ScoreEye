@@ -62,7 +62,11 @@ class ScoreImageWidget(QLabel):
         self.show_candidates = False
         self.show_system_groups = True  # Show system group clustering
         self.show_measure_boxes = False  # Show measure bounding boxes
+        self.show_bracket_candidates = False  # Show bracket candidates
+        self.show_brackets = False  # Show verified brackets
         self.measure_boxes = []  # List of measure bounding boxes
+        self.bracket_candidates = []  # List of bracket candidate lines
+        self.verified_brackets = []  # List of verified brackets
         self.measure_count = 0
         self.staff_systems = []
         self.system_groups = []
@@ -90,7 +94,8 @@ class ScoreImageWidget(QLabel):
         
     def set_detection_results(self, staff_lines, barlines, measure_count, barline_candidates=None, 
                              staff_lines_with_ranges=None, barlines_with_systems=None,
-                             staff_systems=None, system_groups=None, measure_boxes=None):
+                             staff_systems=None, system_groups=None, measure_boxes=None,
+                             bracket_candidates=None, verified_brackets=None):
         """Set the detection results for overlay"""
         self.staff_lines = staff_lines
         self.barlines = barlines
@@ -101,6 +106,8 @@ class ScoreImageWidget(QLabel):
         self.staff_systems = staff_systems or []
         self.system_groups = system_groups or []
         self.measure_boxes = measure_boxes or []
+        self.bracket_candidates = bracket_candidates or []
+        self.verified_brackets = verified_brackets or []
         self.update_display()
         
     def set_scale(self, scale_factor):
@@ -126,6 +133,16 @@ class ScoreImageWidget(QLabel):
     def toggle_system_groups(self, show):
         """Toggle system group clustering overlay"""
         self.show_system_groups = show
+        self.update_display()
+        
+    def toggle_bracket_candidates(self, show):
+        """Toggle bracket candidate overlay"""
+        self.show_bracket_candidates = show
+        self.update_display()
+        
+    def toggle_brackets(self, show):
+        """Toggle verified bracket overlay"""
+        self.show_brackets = show
         self.update_display()
         
     def calculate_fit_scale(self):
@@ -357,6 +374,64 @@ class ScoreImageWidget(QLabel):
                 measure_id = box.get('measure_id', f'M{i+1}')
                 painter.drawText(x_scaled + 5, y_scaled + 15, measure_id)
         
+        # Draw bracket candidates
+        if self.show_bracket_candidates and self.bracket_candidates:
+            pen = QPen(QColor(255, 255, 0, 120), 3)  # Yellow with transparency
+            painter.setPen(pen)
+            for candidate in self.bracket_candidates:
+                try:
+                    if isinstance(candidate, (list, tuple)) and len(candidate) == 4:
+                        x1, y1, x2, y2 = candidate
+                        x1_scaled = int(x1 * self.scale_factor)
+                        y1_scaled = int(y1 * self.scale_factor)
+                        x2_scaled = int(x2 * self.scale_factor)
+                        y2_scaled = int(y2 * self.scale_factor)
+                        painter.drawLine(x1_scaled, y1_scaled, x2_scaled, y2_scaled)
+                    else:
+                        print(f"Debug: Skipping invalid candidate: {candidate}")
+                except Exception as e:
+                    print(f"Debug: Error drawing candidate {candidate}: {e}")
+        
+        # Draw verified brackets
+        if self.show_brackets and self.verified_brackets:
+            pen = QPen(QColor(255, 0, 255, 180), 4)  # Magenta with transparency
+            painter.setPen(pen)
+            font = QFont("Arial", 10)
+            painter.setFont(font)
+            
+            for i, bracket in enumerate(self.verified_brackets):
+                if isinstance(bracket, dict):
+                    # Bracket info dictionary format
+                    x = bracket.get('x', 0)
+                    y_start = bracket.get('y_start', 0)
+                    y_end = bracket.get('y_end', 0)
+                    
+                    x_scaled = int(x * self.scale_factor)
+                    y_start_scaled = int(y_start * self.scale_factor)
+                    y_end_scaled = int(y_end * self.scale_factor)
+                    
+                    # Draw main vertical line
+                    painter.drawLine(x_scaled, y_start_scaled, x_scaled, y_end_scaled)
+                    
+                    # Draw top horizontal line (bracket corner)
+                    painter.drawLine(x_scaled, y_start_scaled, x_scaled + 15, y_start_scaled)
+                    
+                    # Draw bottom horizontal line (bracket corner)
+                    painter.drawLine(x_scaled, y_end_scaled, x_scaled + 15, y_end_scaled)
+                    
+                    # Draw bracket label
+                    systems = bracket.get('covered_staff_system_indices', [])
+                    label = f"B{i+1}({len(systems)})"
+                    painter.drawText(x_scaled + 20, y_start_scaled + 15, label)
+                else:
+                    # Raw coordinate format [x1, y1, x2, y2]
+                    x1, y1, x2, y2 = bracket
+                    x1_scaled = int(x1 * self.scale_factor)
+                    y1_scaled = int(y1 * self.scale_factor)
+                    x2_scaled = int(x2 * self.scale_factor)
+                    y2_scaled = int(y2 * self.scale_factor)
+                    painter.drawLine(x1_scaled, y1_scaled, x2_scaled, y2_scaled)
+        
         # Draw measure count
         if self.measure_count > 0:
             pen = QPen(QColor(0, 255, 0), 3)  # Green
@@ -529,6 +604,18 @@ class ScoreEyeGUI(QMainWindow):
         self.show_measure_boxes_cb.setToolTip("Preview measure extraction bounding boxes")
         self.show_measure_boxes_cb.toggled.connect(self.toggle_measure_boxes)
         display_layout.addWidget(self.show_measure_boxes_cb)
+        
+        self.show_bracket_candidates_cb = QCheckBox("Show Bracket Candidates")
+        self.show_bracket_candidates_cb.setChecked(False)
+        self.show_bracket_candidates_cb.setToolTip("Show bracket candidate vertical lines")
+        self.show_bracket_candidates_cb.toggled.connect(self.toggle_bracket_candidates)
+        display_layout.addWidget(self.show_bracket_candidates_cb)
+        
+        self.show_brackets_cb = QCheckBox("Show Verified Brackets")
+        self.show_brackets_cb.setChecked(False)
+        self.show_brackets_cb.setToolTip("Show verified bracket detections")
+        self.show_brackets_cb.toggled.connect(self.toggle_brackets)
+        display_layout.addWidget(self.show_brackets_cb)
         
         self.fit_window_btn = QPushButton("Fit to Window")
         self.fit_window_btn.clicked.connect(self.fit_to_window)
@@ -757,6 +844,30 @@ class ScoreEyeGUI(QMainWindow):
             detector = MeasureDetector()
             self._current_binary_img = detector.preprocess_image(results['original_image'])
         
+        # Extract bracket data from results
+        detected_brackets = results.get('detected_brackets', [])
+        raw_bracket_candidates = results.get('bracket_candidates', [])  # Get raw candidates
+        verified_brackets = detected_brackets  # Detected brackets are already verified
+        
+        print(f"Debug GUI: detected_brackets count: {len(detected_brackets)}")
+        print(f"Debug GUI: raw_bracket_candidates count: {len(raw_bracket_candidates)}")
+        if raw_bracket_candidates:
+            print(f"Debug GUI: First raw candidate type: {type(raw_bracket_candidates[0])}")
+            print(f"Debug GUI: First raw candidate: {raw_bracket_candidates[0]}")
+        
+        # Filter and store only valid coordinate lists for candidates
+        self.bracket_candidates = []
+        for candidate in raw_bracket_candidates:
+            if isinstance(candidate, (list, tuple)) and len(candidate) == 4:
+                self.bracket_candidates.append(candidate)
+        
+        self.verified_brackets = detected_brackets  # These are verified bracket dicts
+        
+        print(f"Debug GUI: Filtered bracket_candidates count: {len(self.bracket_candidates)}")
+        print(f"Debug GUI: Stored verified_brackets count: {len(self.verified_brackets)}")
+        if self.bracket_candidates:
+            print(f"Debug GUI: First filtered candidate: {self.bracket_candidates[0]}")
+        
         # Update display
         self.image_widget.set_detection_results(
             results['staff_lines'],
@@ -766,7 +877,10 @@ class ScoreEyeGUI(QMainWindow):
             results.get('staff_lines_with_ranges', []),
             results.get('barlines_with_systems', []),
             results.get('staff_systems', []),
-            results.get('system_groups', [])
+            results.get('system_groups', []),
+            None,  # measure_boxes - not used yet
+            self.bracket_candidates,  # bracket_candidates - raw coordinates
+            self.verified_brackets    # verified_brackets - dict objects
         )
         
         # Update results label with system-specific info
@@ -775,10 +889,14 @@ class ScoreEyeGUI(QMainWindow):
         staff_systems = results.get('staff_systems', [])
         system_groups = results.get('system_groups', [])
         
+        # Add bracket info
+        bracket_count = len(detected_brackets)
+        
         results_text = (
             f"Detected:\n"
             f"- {len(results['staff_lines'])} staff lines\n"
             f"- {len(staff_systems)} staff systems\n"
+            f"- {bracket_count} brackets\n"
             f"- {candidates_count} barline candidates\n"
             f"- {len(results['barlines'])} valid barlines\n"
             f"- {results['measure_count']} measures\n"
@@ -902,6 +1020,14 @@ class ScoreEyeGUI(QMainWindow):
             self.image_widget.measure_boxes = []
         self.image_widget.update_display()
     
+    def toggle_bracket_candidates(self, checked):
+        """Toggle bracket candidate display"""
+        self.image_widget.toggle_bracket_candidates(checked)
+    
+    def toggle_brackets(self, checked):
+        """Toggle verified bracket display"""
+        self.image_widget.toggle_brackets(checked)
+    
     def generate_measure_boxes(self):
         """Generate measure bounding boxes using SYSTEM-SPECIFIC barlines"""
         if not hasattr(self, 'detection_results') or not self.detection_results:
@@ -941,6 +1067,12 @@ class ScoreEyeGUI(QMainWindow):
         # Generate measure boxes: Each system group's barlines apply to ALL systems in that group
         measure_boxes = []
         
+        # Get bracket information for measure start positions
+        brackets = []
+        if hasattr(self.image_widget, 'verified_brackets') and self.image_widget.verified_brackets:
+            brackets = self.image_widget.verified_brackets
+            print(f"Debug - Found {len(brackets)} brackets for measure start positions")
+        
         # Process each system group and apply its barlines to all systems in the group
         for group_idx, system_indices in enumerate(system_groups):
             group_barlines = barlines_by_system_group.get(group_idx, [])
@@ -949,7 +1081,18 @@ class ScoreEyeGUI(QMainWindow):
                 continue
                 
             group_barlines_sorted = sorted(group_barlines)
-            extended_group_barlines = [0] + group_barlines_sorted
+            
+            # Find bracket X coordinate for this system group as measure start
+            bracket_x = 0  # Default fallback
+            for bracket in brackets:
+                bracket_systems = bracket.get('covered_staff_system_indices', [])
+                # Check if this bracket covers systems in current group
+                if any(sys_idx in bracket_systems for sys_idx in system_indices):
+                    bracket_x = bracket.get('x', 0)
+                    print(f"Debug - System Group {group_idx}: Using bracket at x={bracket_x} as measure start")
+                    break
+            
+            extended_group_barlines = [bracket_x] + group_barlines_sorted
             
             print(f"Debug - System Group {group_idx}: barlines {group_barlines_sorted}")
             print(f"      Applying to systems: {system_indices}")
@@ -974,15 +1117,12 @@ class ScoreEyeGUI(QMainWindow):
                     
                     system_measure_count += 1
                     
-                    # Calculate y-range with margin for this system
-                    top = system['top']
-                    bottom = system['bottom']
-                    
-                    # Add margin
-                    avg_spacing = system.get('avg_spacing', 20)
-                    y_margin = int(avg_spacing * 0.5)
-                    y1 = max(0, top - y_margin)
-                    y2 = bottom + y_margin
+                    # Calculate optimal Y range considering adjacent systems
+                    page_height = self.detection_results['original_image'].shape[0]
+                    detector = MeasureDetector(debug=False)  # Create temporary detector for method access
+                    y1, y2 = detector.calculate_optimal_measure_y_range(
+                        system, staff_systems, page_height
+                    )
                     
                     # Create measure box for this system
                     measure_box = {

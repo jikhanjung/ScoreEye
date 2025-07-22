@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added - 2025-07-22
 
+#### 🎼 Square Bracket Detection System
+- **3-Phase Hybrid Detection Algorithm**: Comprehensive bracket detection using HoughLinesP + template matching approach
+  - **Phase 1**: ROI-based vertical line detection (left 15% of image)
+  - **Phase 2**: Bracket corner verification using morphological operations
+  - **Phase 3**: Staff system mapping and structured data extraction
+- **Advanced Clustering System**: 2-stage clustering to merge thick brackets detected as multiple lines
+  - X-coordinate grouping (50px tolerance) + Y-continuity validation (100px gap threshold)
+  - Reduces 36+ duplicate candidates to 3 accurate bracket detections
+- **GUI Visualization**: Real-time bracket display with dual checkboxes
+  - "Show Bracket Candidates": Yellow overlay for raw vertical line candidates
+  - "Show Verified Brackets": Magenta overlay for verified brackets with corner elements
+- **System Group Integration**: Brackets automatically mapped to covered staff system indices
+
+#### 📏 Measure Y-Range Optimization System
+- **Adjacent System Space Utilization**: Optimal Y-range calculation considering neighboring staff systems
+  - Middle systems: Use half of gap space above and below
+  - Boundary systems: Extend by 75% of system height toward page edges
+- **Enhanced Note Preservation**: 2-3x larger measure height (40-60px → 120-200px)
+  - Prevents clipping of high/low notes, accents, and musical ornaments
+  - Maintains clean separation between adjacent system measures
+- **Intelligent Boundary Detection**: Automatic identification of page-top and page-bottom systems
+
+#### 🎯 Bracket-Based Measure Starting Points
+- **Accurate Measure Boundaries**: First measure starts from bracket X-coordinate instead of X=0
+- **System Group Alignment**: Bracket-to-system-group mapping for precise measure positioning
+- **Consistent CLI/GUI Behavior**: Identical bracket-based starting logic in both interfaces
+
 #### 🎼 Measure Extraction System (Phase 1.1 of OMR Pipeline)
 - **CLI Tool: `extract_measures.py`**: Complete command-line utility for batch measure extraction from PDF files
 - **GUI Integration**: Seamless measure extraction directly from GUI with visual preview
