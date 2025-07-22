@@ -110,6 +110,101 @@ trained_models/
 *.h5
 *.pt
 *.pth
+*.onnx
+*.engine
+*.trt
+checkpoint/
+checkpoints/
+weights/
+
+# Deep Learning / YOLOv8 specific
+runs/
+wandb/
+mlruns/
+tensorboard/
+logs/
+training_logs/
+validation_logs/
+*.tfevents.*
+*.tb
+
+# Datasets and large data files
+data/
+datasets/
+dataset/
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+raw_data/
+processed_data/
+cache/
+.cache/
+
+# DeepScores workspace (exclude large data/output directories, keep Python scripts)
+deepscores_workspace/data/
+deepscores_workspace/ds2_dense/
+deepscores_workspace/raw_data/
+deepscores_workspace/runs/
+deepscores_workspace/scoreeye-yolov8/
+deepscores_workspace/wandb/
+deepscores_workspace/validation_reports/
+deepscores_workspace/models/
+deepscores_workspace/weights/
+deepscores_workspace/cache/
+deepscores_workspace/*.pt
+deepscores_workspace/*.pth
+deepscores_workspace/*.png
+deepscores_workspace/*.jpg
+
+# Training outputs
+results/
+outputs/
+predictions/
+submission/
+*.csv
+confusion_matrix.png
+*.npy
+*.npz
+
+# Annotation files (if large)
+annotations/
+labels/
+*.json
+*.xml
+*.txt
+!requirements.txt
+!*.md
+
+# Jupyter notebook outputs
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# Python egg files
+*.egg-info/
+dist/
+build/
+
+# Hydra outputs
+outputs/
+multirun/
+
+# DVC (Data Version Control)
+.dvc/
+.dvcignore
+
+# Neptune.ai
+.neptune/
+
+# Comet.ml
+.comet/
+
+# ClearML
+.clearml/
+
+# Aim
+.aim/
 
 # Generated documentation
 docs/_build/
