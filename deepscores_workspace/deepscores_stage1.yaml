@@ -1,0 +1,54 @@
+names:
+  0: stem
+  1: noteheadBlackOnLine
+  2: noteheadBlackInSpace
+  3: ledgerLine
+  4: beam
+  5: staff
+  6: augmentationDot
+  7: tie
+  8: keyFlat
+  9: restWhole
+  10: keySharp
+  11: clefG
+  12: noteheadHalfInSpace
+  13: noteheadHalfOnLine
+  14: rest8th
+  15: restQuarter
+  16: flag8thDown
+  17: accidentalSharp
+  18: flag8thUp
+  19: clefF
+  20: accidentalNatural
+  21: accidentalFlat
+  22: slur
+  23: articStaccatoAbove
+  24: rest16th
+  25: noteheadWholeInSpace
+  26: brace
+  27: restHalf
+  28: noteheadWholeOnLine
+  29: articStaccatoBelow
+  30: timeSig4
+  31: dynamicF
+  32: repeatDot
+  33: tuplet3
+  34: timeSigCommon
+  35: flag16thDown
+  36: clef8
+  37: dynamicP
+  38: flag16thUp
+  39: dynamicM
+  40: rest64th
+  41: rest32nd
+  42: tupletBracket
+  43: articAccentAbove
+  44: clefCAlto
+  45: dynamicCrescendoHairpin
+  46: articAccentBelow
+  47: dynamicDiminuendoHairpin
+  48: keyboardPedalUp
+  49: fermataAbove
+path: /home/jikhanjung/projects/ScoreEye/deepscores_workspace/data_stage1
+train: images/train
+val: images/val

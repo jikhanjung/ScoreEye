@@ -143,7 +143,7 @@ cache/
 .cache/
 
 # DeepScores workspace (exclude large data/output directories, keep Python scripts)
-deepscores_workspace/data/
+deepscores_workspace/data*/
 deepscores_workspace/ds2_dense/
 deepscores_workspace/raw_data/
 deepscores_workspace/runs/
@@ -152,6 +152,7 @@ deepscores_workspace/wandb/
 deepscores_workspace/validation_reports/
 deepscores_workspace/models/
 deepscores_workspace/weights/
+deepscores_workspace/cache/
 deepscores_workspace/cache/
 deepscores_workspace/*.pt
 deepscores_workspace/*.pth
