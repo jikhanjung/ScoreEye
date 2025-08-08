@@ -13,6 +13,43 @@ import argparse
 import fitz  # PyMuPDF
 import tempfile
 from dataclasses import dataclass
+import logging
+from datetime import datetime
+
+def setup_logger():
+    """Setup logger to save debug messages to dated files in logs/ directory"""
+    # Create logs directory if it doesn't exist
+    logs_dir = "logs"
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir)
+    
+    # Get existing logger or create new one
+    logger = logging.getLogger('ScoreEye')
+    
+    # Only setup if not already configured
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        
+        # Create file handler with dated filename
+        current_date = datetime.now().strftime("%Y%m%d")
+        log_filename = os.path.join(logs_dir, f"scoreeye_{current_date}.log")
+        
+        file_handler = logging.FileHandler(log_filename, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    
+    return logger
+
+# Initialize logger
+logger = setup_logger()
 
 
 @dataclass
@@ -659,11 +696,11 @@ class MeasureDetector:
         
         if self.debug:
             if not length_valid:
-                print(f"      Barline too long: {actual_length}px > {max_allowed_length}px allowed")
-                print(f"      (Staff spacing: {avg_spacing:.1f}px, ratio: {actual_length/avg_spacing:.1f}x)")
+                logger.debug(f"      Barline too long: {actual_length}px > {max_allowed_length}px allowed")
+                logger.debug(f"      (Staff spacing: {avg_spacing:.1f}px, ratio: {actual_length/avg_spacing:.1f}x)")
             else:
-                print(f"      Barline length OK: {actual_length}px <= {max_allowed_length}px")
-                print(f"      (Ratio: {actual_length/avg_spacing:.1f}x staff spacing)")
+                logger.debug(f"      Barline length OK: {actual_length}px <= {max_allowed_length}px")
+                logger.debug(f"      (Ratio: {actual_length/avg_spacing:.1f}x staff spacing)")
         
         return length_valid
     
@@ -785,7 +822,7 @@ class MeasureDetector:
         }
         
         if self.debug:
-            print(f"Auto-tuned parameters: {params}")
+            logger.debug(f"Auto-tuned parameters: {params}")
         
         return params
     
@@ -808,7 +845,7 @@ class MeasureDetector:
         staff_systems = self.group_staff_lines_into_systems()
         if not staff_systems:
             if self.debug:
-                print("No complete staff systems found, falling back to global detection")
+                logger.debug("No complete staff systems found, falling back to global detection")
             return self.detect_barlines_hough_global(binary_img)
         
         all_barlines_by_system = []  # 각 system별 barline들
@@ -816,8 +853,8 @@ class MeasureDetector:
         # 2. 각 staff system별로 독립적으로 검출
         for system_idx, system in enumerate(staff_systems):
             if self.debug:
-                print(f"\n=== Processing Staff System {system_idx + 1} ===")
-                print(f"Y range: {system['top']} - {system['bottom']} (height: {system['height']})")
+                logger.debug(f"\n=== Processing Staff System {system_idx + 1} ===")
+                logger.debug(f"Y range: {system['top']} - {system['bottom']} (height: {system['height']})")
             
             # System ROI 추출
             roi_margin = int(system['height'] * 0.3)  # 30% 여유
@@ -827,7 +864,7 @@ class MeasureDetector:
             system_roi = binary_img[roi_top:roi_bottom, :]
             
             if self.debug:
-                print(f"ROI: {roi_top} - {roi_bottom} (expanded with {roi_margin}px margin)")
+                logger.debug(f"ROI: {roi_top} - {roi_bottom} (expanded with {roi_margin}px margin)")
             
             # 이 ROI에서 barline 검출
             system_barlines = self.detect_barlines_in_roi(system_roi, system, roi_top)
@@ -850,7 +887,7 @@ class MeasureDetector:
             system['barline_count'] = len(system_barlines)
             
             if self.debug:
-                print(f"Detected {len(system_barlines)} barlines in system {system_idx + 1}: {system_barlines}")
+                logger.info(f"Detected {len(system_barlines)} barlines in system {system_idx + 1}: {system_barlines}")
         
         # 3. Multi-system consensus validation 적용
         validated_barlines = self.validate_barlines_with_consensus(all_barlines_by_system)
@@ -868,13 +905,13 @@ class MeasureDetector:
         self.barlines_with_systems = barlines_with_systems
         
         if self.debug:
-            print(f"\n=== Final Results (After Consensus Validation) ===")
-            print(f"Total validated barlines: {len(all_barlines)}")
-            print(f"Barline-system assignments: {len(barlines_with_systems)}")
+            logger.debug(f"\n=== Final Results (After Consensus Validation) ===")
+            logger.debug(f"Total validated barlines: {len(all_barlines)}")
+            logger.debug(f"Barline-system assignments: {len(barlines_with_systems)}")
             for system_idx, system in enumerate(staff_systems):
                 original_count = system['barline_count']
                 validated_count = len([bl for bl in validated_barlines if system_idx in bl.get('systems_with_barline', [])])
-                print(f"System {system_idx + 1}: {original_count} detected → {validated_count} validated")
+                logger.debug(f"System {system_idx + 1}: {original_count} detected → {validated_count} validated")
         
         return sorted(all_barlines)
     
@@ -903,7 +940,7 @@ class MeasureDetector:
         }
         
         if self.debug:
-            print(f"  ROI parameters: {params}")
+            logger.debug(f"  ROI parameters: {params}")
         
         # HoughLinesP 검출
         all_lines = cv2.HoughLinesP(
@@ -919,12 +956,12 @@ class MeasureDetector:
             return []
         
         if self.debug:
-            print(f"  Raw lines detected: {len(all_lines)}")
+            logger.debug(f"  Raw lines detected: {len(all_lines)}")
         
         # 수직성 필터링
         vertical_lines = self.filter_vertical_lines(all_lines, params['angle_tolerance'])
         if self.debug:
-            print(f"  Vertical lines: {len(vertical_lines)}")
+            logger.debug(f"  Vertical lines: {len(vertical_lines)}")
         
         if not vertical_lines:
             return []
@@ -934,7 +971,7 @@ class MeasureDetector:
         line_groups = self.group_lines_by_x_coordinate(vertical_lines, x_tolerance)
         
         if self.debug:
-            print(f"  Line groups: {len(line_groups)}")
+            logger.debug(f"  Line groups: {len(line_groups)}")
         
         if not line_groups:
             return []
@@ -1010,8 +1047,8 @@ class MeasureDetector:
             group_y_max = max(group_y_max, y1, y2)
         
         if self.debug:
-            print(f"      Group Y range: {group_y_min:.1f} - {group_y_max:.1f}")
-            print(f"      Staff range: {top_staff} - {bottom_staff}")
+            logger.debug(f"      Group Y range: {group_y_min:.1f} - {group_y_max:.1f}")
+            logger.debug(f"      Staff range: {top_staff} - {bottom_staff}")
         
         # 3. Y 범위 검증: staff line 간격에 상대적인 기준
         # Staff line 간격을 계산 (ROI 좌표계 기준)
@@ -1037,13 +1074,13 @@ class MeasureDetector:
         
         if not (reaches_top and reaches_bottom):
             if self.debug:
-                print(f"      Range check failed: reaches_top={reaches_top}, reaches_bottom={reaches_bottom}")
+                logger.debug(f"      Range check failed: reaches_top={reaches_top}, reaches_bottom={reaches_bottom}")
             return False
             
         if extends_too_much_above or extends_too_much_below:
             if self.debug:
-                print(f"      Length check failed: extends_above={extends_too_much_above}, extends_below={extends_too_much_below}")
-                print(f"      Allowed range: {top_staff - max_extension} to {bottom_staff + max_extension}")
+                logger.debug(f"      Length check failed: extends_above={extends_too_much_above}, extends_below={extends_too_much_below}")
+                logger.debug(f"      Allowed range: {top_staff - max_extension} to {bottom_staff + max_extension}")
             return False
         
         # 4. 실제 픽셀 교차점 검증: 최상단과 최하단에서 교차 확인
@@ -1053,8 +1090,8 @@ class MeasureDetector:
             roi_img, center_x, bottom_staff, avg_spacing)
         
         if self.debug:
-            print(f"      Pixel intersect: top={top_intersect}, bottom={bottom_intersect}")
-            print(f"      Staff spacing: {avg_spacing:.1f}px, margins: top={top_margin:.1f}, bottom={bottom_margin:.1f}, ext={max_extension:.1f}")
+            logger.debug(f"      Pixel intersect: top={top_intersect}, bottom={bottom_intersect}")
+            logger.debug(f"      Staff spacing: {avg_spacing:.1f}px, margins: top={top_margin:.1f}, bottom={bottom_margin:.1f}, ext={max_extension:.1f}")
         
         # 5. 길이 제한 검증: staff 간격에 상대적 기준
         if max_allowed_length is not None:
@@ -1067,8 +1104,8 @@ class MeasureDetector:
                     print(f"      (Staff spacing: {avg_spacing:.1f}px)")
                 return False
             elif self.debug:
-                print(f"      Length check passed: {actual_length:.1f}px <= {max_allowed_length}px")
-                print(f"      (Ratio: {actual_length/avg_spacing:.1f}x staff spacing)")
+                logger.debug(f"      Length check passed: {actual_length:.1f}px <= {max_allowed_length}px")
+                logger.debug(f"      (Ratio: {actual_length/avg_spacing:.1f}x staff spacing)")
         
         return top_intersect and bottom_intersect
     
@@ -1135,12 +1172,12 @@ class MeasureDetector:
             all_lines = []
         
         if self.debug:
-            print(f"Raw HoughLinesP detected: {len(all_lines)} lines")
+            logger.debug(f"Raw HoughLinesP detected: {len(all_lines)} lines")
         
         # 4. 수직성 필터링
         vertical_lines = self.filter_vertical_lines(all_lines, params['angle_tolerance'])
         if self.debug:
-            print(f"Vertical lines filtered: {len(vertical_lines)}")
+            logger.debug(f"Vertical lines filtered: {len(vertical_lines)}")
         
         if not vertical_lines:
             return []
@@ -1148,7 +1185,7 @@ class MeasureDetector:
         # 5. X좌표 기반 그룹핑
         line_groups = self.group_lines_by_x_coordinate(vertical_lines, params['x_tolerance'])
         if self.debug:
-            print(f"Line groups formed: {len(line_groups)}")
+            logger.debug(f"Line groups formed: {len(line_groups)}")
         
         if not line_groups:
             return []
@@ -1161,16 +1198,16 @@ class MeasureDetector:
         final_barlines = self.select_final_barlines(analyzed_groups, self.staff_lines, min_score)
         
         if self.debug:
-            print(f"Final barlines selected: {len(final_barlines)}")
+            logger.debug(f"Final barlines selected: {len(final_barlines)}")
             for i, barline in enumerate(final_barlines):
-                print(f"  Barline {i+1}: x={barline['x']}, score={barline['score']:.1f}, "
+                logger.debug(f"  Barline {i+1}: x={barline['x']}, score={barline['score']:.1f}, "
                       f"intersections={barline['staff_intersections']}")
         
         # Staff system 기반으로 결과 재구성
         staff_systems = self.group_staff_lines_into_systems()
         if not staff_systems:
             if self.debug:
-                print("No complete staff systems found (need 5-line groups)")
+                logger.debug("No complete staff systems found (need 5-line groups)")
             return [b['x'] for b in final_barlines]
         
         # Barline들을 staff system에 할당
@@ -1551,6 +1588,7 @@ class MeasureDetector:
         Returns:
             list: 각 system group의 리스트 [[system1_indices], [system2_indices], ...]
         """
+        logger.debug(f"detect_system_groups: Starting with {len(getattr(self, 'staff_systems', []))} systems")
         # staff_systems가 초기화되지 않은 경우, group_staff_lines_into_systems()를 먼저 호출
         if not hasattr(self, 'staff_systems') or not self.staff_systems:
             staff_systems = self.group_staff_lines_into_systems()
@@ -1594,6 +1632,7 @@ class MeasureDetector:
                     
                     if len(sorted_gaps) >= 6:  # 12개 system의 경우 11개 간격
                         # Jump detection: 간격의 급격한 변화를 찾아서 quartet 경계를 결정
+                        print(f"DEBUG: Using Jump detection path (sorted_gaps >= 6)")
                         # 연속된 간격들 사이의 차이를 계산
                         gap_jumps = []
                         for i in range(1, len(sorted_gaps)):
@@ -1609,7 +1648,15 @@ class MeasureDetector:
                                 # jump 직전과 직후의 중간값을 threshold로 사용
                                 small_gap_max = sorted_gaps[max_jump_idx]
                                 large_gap_min = sorted_gaps[max_jump_idx + 1]
-                                cluster_threshold = (small_gap_max + large_gap_min) / 2
+                                auto_threshold = (small_gap_max + large_gap_min) / 2
+                                
+                                # Use user-configured threshold if it's significantly different from default
+                                if abs(self.config.system_group_clustering_ratio - 8.0) > 0.5:
+                                    # User has adjusted threshold, use it instead
+                                    cluster_threshold = avg_spacing * self.config.system_group_clustering_ratio
+                                    print(f"DEBUG: Override jump detection with user threshold: {cluster_threshold:.1f} (ratio={self.config.system_group_clustering_ratio})")
+                                else:
+                                    cluster_threshold = auto_threshold
                                 
                                 if self.debug:
                                     print(f"Jump detection analysis:")
@@ -1627,6 +1674,7 @@ class MeasureDetector:
                                     print(f"Percentile-based threshold: {cluster_threshold:.1f} (60th percentile)")
                         else:
                             cluster_threshold = avg_spacing * self.config.system_group_clustering_ratio
+                            print(f"DEBUG: Using system_group_clustering_ratio = {self.config.system_group_clustering_ratio}, avg_spacing = {avg_spacing:.1f}, threshold = {cluster_threshold:.1f}")
                     else:
                         # 간격 수가 적을 때는 단순한 방법 사용
                         median_gap = np.median(sorted_gaps)
@@ -1637,8 +1685,10 @@ class MeasureDetector:
                             print(f"Simple quartet threshold: {cluster_threshold:.1f} (median: {median_gap:.1f} * 1.3)")
                 else:
                     cluster_threshold = avg_spacing * self.config.system_group_clustering_ratio
+                    print(f"DEBUG: Using system_group_clustering_ratio = {self.config.system_group_clustering_ratio}, avg_spacing = {avg_spacing:.1f}, threshold = {cluster_threshold:.1f}")
             else:
                 cluster_threshold = avg_spacing * self.config.system_group_clustering_ratio
+                logger.debug(f"DEBUG: Using system_group_clustering_ratio = {self.config.system_group_clustering_ratio}, avg_spacing = {avg_spacing:.1f}, threshold = {cluster_threshold:.1f}")
         else:
             cluster_threshold = 100  # 기본값
         
@@ -1663,13 +1713,13 @@ class MeasureDetector:
             system_groups.append(current_group)
         
         if self.debug:
-            print(f"\n=== System Group Clustering ===")
-            print(f"Clustering threshold: {cluster_threshold:.1f} pixels")
-            print(f"Detected {len(system_groups)} system group(s):")
+            logger.debug(f"\n=== System Group Clustering ===")
+            logger.debug(f"Clustering threshold: {cluster_threshold:.1f} pixels")
+            logger.info(f"Detected {len(system_groups)} system group(s):")
             for i, group in enumerate(system_groups):
                 group_centers = [system_centers[j]['center_y'] for j in range(len(system_centers)) 
                                if system_centers[j]['idx'] in group]
-                print(f"  Group {i+1}: Systems {group} (Y centers: {group_centers})")
+                logger.debug(f"  Group {i+1}: Systems {group} (Y centers: {group_centers})")
         
         return system_groups
     
@@ -1698,13 +1748,13 @@ class MeasureDetector:
             x_tolerance = 5  # 기본값
         
         if self.debug:
-            print(f"\n=== Multi-System Barline Consensus Validation ===")
-            print(f"X-coordinate tolerance: {x_tolerance} pixels")
-            print(f"Minimum consensus ratio: {self.config.min_consensus_ratio}")
+            logger.debug(f"\n=== Multi-System Barline Consensus Validation ===")
+            logger.debug(f"X-coordinate tolerance: {x_tolerance} pixels")
+            logger.debug(f"Minimum consensus ratio: {self.config.min_consensus_ratio}")
         
         for group_idx, system_indices in enumerate(system_groups):
             if self.debug:
-                print(f"\nProcessing System Group {group_idx + 1}: {system_indices}")
+                logger.debug(f"\nProcessing System Group {group_idx + 1}: {system_indices}")
             
             # 이 그룹의 system들에서 검출된 모든 barline들 수집
             group_barlines = []
@@ -1786,7 +1836,7 @@ class MeasureDetector:
                         print(f"  ✗ Barline at x={avg_x} - Insufficient consensus: {consensus_count}/{len(system_indices)} systems")
         
         if self.debug:
-            print(f"\nConsensus validation result: {len(validated_barlines)} validated barlines")
+            logger.debug(f"\nConsensus validation result: {len(validated_barlines)} validated barlines")
         
         return validated_barlines
     
@@ -1946,9 +1996,9 @@ class MeasureDetector:
             })
             
         if self.debug:
-            print(f"Detected {len(staff_systems)} complete staff systems (5 lines each)")
+            logger.info(f"Detected {len(staff_systems)} complete staff systems (5 lines each)")
             for i, system in enumerate(staff_systems):
-                print(f"  System {i+1}: y={system['top']}-{system['bottom']}, "
+                logger.debug(f"  System {i+1}: y={system['top']}-{system['bottom']}, "
                       f"height={system['height']}, spacing={system['avg_spacing']:.1f}")
         
         return staff_systems
@@ -1988,9 +2038,9 @@ class MeasureDetector:
                 })
         
         if self.debug:
-            print(f"Assigned {len(barlines_with_systems)} barline-system pairs")
+            logger.debug(f"Assigned {len(barlines_with_systems)} barline-system pairs")
             for bl in barlines_with_systems:
-                print(f"  Barline x={bl['x']} -> System {bl['system_idx']} "
+                logger.debug(f"  Barline x={bl['x']} -> System {bl['system_idx']} "
                       f"(y={bl['y_start']}-{bl['y_end']})")
         
         return barlines_with_systems
@@ -2282,12 +2332,90 @@ class MeasureDetector:
         Returns:
             int: Number of measures
         """
-        # Number of measures = number of barlines - 1
-        # (assuming first and last barlines mark beginning and end)
-        if len(self.barlines) >= 2:
-            return len(self.barlines) - 1
+        # For multi-system consensus validation, use barlines from staff systems
+        if hasattr(self, 'staff_systems') and self.staff_systems:
+            # Find the system with the most barlines (most reliable)
+            max_barlines = 0
+            for system in self.staff_systems:
+                barline_count = system.get('barline_count', 0)
+                if barline_count > max_barlines:
+                    max_barlines = barline_count
+            
+            # Number of measures = number of barlines - 1
+            if max_barlines >= 2:
+                return max_barlines - 1
+            else:
+                return 0
         else:
-            return 0
+            # Fallback to legacy method
+            if len(self.barlines) >= 2:
+                return len(self.barlines) - 1
+            else:
+                return 0
+    
+    def _coords_to_ratio(self, coords_dict):
+        """Convert pixel coordinates to page ratios (0-1)
+        
+        Args:
+            coords_dict: Dictionary containing coordinate values
+            
+        Returns:
+            dict: Coordinates converted to ratios
+        """
+        if not hasattr(self, 'image') or self.image is None:
+            return coords_dict
+            
+        height, width = self.image.shape[:2]
+        converted = coords_dict.copy()
+        
+        # Convert x coordinates to ratios
+        if 'x' in converted:
+            converted['x'] = converted['x'] / width
+        if 'x1' in converted:
+            converted['x1'] = converted['x1'] / width
+        if 'x2' in converted:
+            converted['x2'] = converted['x2'] / width
+        if 'center_x' in converted:
+            converted['center_x'] = converted['center_x'] / width
+        if 'left' in converted:
+            converted['left'] = converted['left'] / width
+        if 'right' in converted:
+            converted['right'] = converted['right'] / width
+            
+        # Convert y coordinates to ratios
+        if 'y' in converted:
+            converted['y'] = converted['y'] / height
+        if 'y1' in converted:
+            converted['y1'] = converted['y1'] / height
+        if 'y2' in converted:
+            converted['y2'] = converted['y2'] / height
+        if 'center_y' in converted:
+            converted['center_y'] = converted['center_y'] / height
+        if 'top' in converted:
+            converted['top'] = converted['top'] / height
+        if 'bottom' in converted:
+            converted['bottom'] = converted['bottom'] / height
+        if 'y_start' in converted:
+            converted['y_start'] = converted['y_start'] / height
+        if 'y_end' in converted:
+            converted['y_end'] = converted['y_end'] / height
+            
+        # Convert lists of coordinates
+        if 'lines' in converted and isinstance(converted['lines'], list):
+            converted['lines'] = [line / height for line in converted['lines']]
+            
+        return converted
+    
+    def _list_coords_to_ratio(self, coords_list):
+        """Convert list of coordinate dictionaries to ratios
+        
+        Args:
+            coords_list: List of dictionaries containing coordinates
+            
+        Returns:
+            list: List with coordinates converted to ratios
+        """
+        return [self._coords_to_ratio(item) for item in coords_list]
     
     def visualize_results(self, img, output_path=None):
         """Visualize detected barlines and measure count.
@@ -2368,18 +2496,24 @@ class MeasureDetector:
         
         # Detect staff lines
         staff_lines = self.detect_staff_lines(binary)
-        print(f"Detected {len(staff_lines)} staff lines")
+        logger.info(f"Detected {len(staff_lines)} staff lines")
         
         # Detect barlines
         barline_candidates = self.detect_barlines(binary)
-        print(f"Found {len(barline_candidates)} barline candidates")
+        logger.info(f"Found {len(barline_candidates)} barline candidates")
         
         # Filter barlines
         barlines = self.filter_barlines(barline_candidates)
-        print(f"Filtered to {len(barlines)} valid barlines")
+        logger.info(f"Filtered to {len(barlines)} valid barlines")
         
         # Count measures
         measure_count = self.count_measures()
+        
+        # Detect brackets (after staff systems are available)
+        brackets = []
+        if hasattr(self, 'staff_systems') and self.staff_systems:
+            brackets = self.detect_brackets(binary)
+            logger.info(f"Detected {len(brackets)} brackets")
         
         results = {
             'measure_count': measure_count,
@@ -2387,8 +2521,38 @@ class MeasureDetector:
             'barline_candidates': barline_candidates,
             'staff_lines': [line['y'] if isinstance(line, dict) else line for line in staff_lines],
             'staff_lines_with_ranges': staff_lines if staff_lines and isinstance(staff_lines[0], dict) else [],
-            'barlines_with_systems': getattr(self, 'barlines_with_systems', [])
+            'barlines_with_systems': getattr(self, 'barlines_with_systems', []),
+            'staff_systems': getattr(self, 'staff_systems', []),
+            'system_groups': self.detect_system_groups() if hasattr(self, 'staff_systems') else [],
+            'detected_brackets': brackets,
+            'bracket_candidates': getattr(self, 'bracket_candidates', [])
         }
+        
+        # Convert coordinates to ratios (0-1) relative to page size
+        logger.debug(f"Converting coordinates to ratios - image available: {hasattr(self, 'image') and self.image is not None}")
+        if hasattr(self, 'image') and self.image is not None:
+            height, width = self.image.shape[:2]
+            logger.debug(f"Page dimensions: {width}x{height}")
+            
+            # Convert barlines (simple x coordinates)
+            if results['barlines']:
+                results['barlines'] = [x / width for x in results['barlines']]
+            
+            # Convert barline candidates (x coordinates)  
+            if results['barline_candidates']:
+                results['barline_candidates'] = [x / width for x in results['barline_candidates']]
+                
+            # Convert staff lines (y coordinates)
+            if results['staff_lines']:
+                results['staff_lines'] = [y / height for y in results['staff_lines']]
+                
+            # Convert staff lines with ranges
+            if results['staff_lines_with_ranges']:
+                results['staff_lines_with_ranges'] = self._list_coords_to_ratio(results['staff_lines_with_ranges'])
+                
+            # Convert barlines with systems
+            if results['barlines_with_systems']:
+                results['barlines_with_systems'] = self._list_coords_to_ratio(results['barlines_with_systems'])
         
         return results
     
@@ -2406,6 +2570,7 @@ class MeasureDetector:
         """
         # Load PDF page as image
         img = self.load_pdf_page(pdf_path, page_num, dpi)
+        self.image = img  # Store for coordinate conversion
         
         # Preprocess - 대안 방법 선택 가능
         if use_alternative_preprocessing:
@@ -2415,15 +2580,15 @@ class MeasureDetector:
         
         # Detect staff lines
         staff_lines = self.detect_staff_lines(binary)
-        print(f"Detected {len(staff_lines)} staff lines")
+        logger.info(f"Detected {len(staff_lines)} staff lines")
         
         # Detect barlines
         barline_candidates = self.detect_barlines(binary)
-        print(f"Found {len(barline_candidates)} barline candidates")
+        logger.info(f"Found {len(barline_candidates)} barline candidates")
         
         # Filter barlines
         barlines = self.filter_barlines(barline_candidates)
-        print(f"Filtered to {len(barlines)} valid barlines")
+        logger.info(f"Filtered to {len(barlines)} valid barlines")
         
         # Count measures
         measure_count = self.count_measures()
@@ -2432,7 +2597,7 @@ class MeasureDetector:
         brackets = []
         if hasattr(self, 'staff_systems') and self.staff_systems:
             brackets = self.detect_brackets(binary)
-            print(f"Detected {len(brackets)} brackets")
+            logger.info(f"Detected {len(brackets)} brackets")
         
         results = {
             'measure_count': measure_count,
@@ -2447,6 +2612,49 @@ class MeasureDetector:
             'bracket_candidates': getattr(self, 'bracket_candidates', []),
             'original_image': img
         }
+        
+        # Convert coordinates to ratios (0-1) relative to page size
+        logger.debug(f"Converting coordinates to ratios - image available: {hasattr(self, 'image') and self.image is not None}")
+        if hasattr(self, 'image') and self.image is not None:
+            height, width = self.image.shape[:2]
+            logger.debug(f"Page dimensions: {width}x{height}")
+            
+            # Convert barlines (simple x coordinates)
+            if results['barlines']:
+                results['barlines'] = [x / width for x in results['barlines']]
+            
+            # Convert barline candidates (x coordinates)  
+            if results['barline_candidates']:
+                results['barline_candidates'] = [x / width for x in results['barline_candidates']]
+                
+            # Convert staff lines (y coordinates)
+            if results['staff_lines']:
+                results['staff_lines'] = [y / height for y in results['staff_lines']]
+                
+            # Convert staff lines with ranges
+            if results['staff_lines_with_ranges']:
+                results['staff_lines_with_ranges'] = self._list_coords_to_ratio(results['staff_lines_with_ranges'])
+                
+            # Convert barlines with systems
+            if results['barlines_with_systems']:
+                results['barlines_with_systems'] = self._list_coords_to_ratio(results['barlines_with_systems'])
+                
+            # Convert staff systems
+            if results['staff_systems']:
+                results['staff_systems'] = self._list_coords_to_ratio(results['staff_systems'])
+                
+            # Convert system groups  
+            if results['system_groups']:
+                results['system_groups'] = self._list_coords_to_ratio(results['system_groups'])
+                
+            # Convert detected brackets
+            if results['detected_brackets']:
+                logger.debug(f"Converting {len(results['detected_brackets'])} brackets to ratios")
+                results['detected_brackets'] = self._list_coords_to_ratio(results['detected_brackets'])
+                
+            # Convert bracket candidates
+            if results['bracket_candidates']:
+                results['bracket_candidates'] = self._list_coords_to_ratio(results['bracket_candidates'])
         
         return results
 
@@ -2467,30 +2675,30 @@ class MeasureDetector:
         """
         if not hasattr(self, 'staff_systems') or not self.staff_systems:
             if self.debug:
-                print("Warning: No staff systems available for bracket detection")
+                logger.debug("Warning: No staff systems available for bracket detection")
             return []
         
         # Phase 1: Find vertical bracket candidates using HoughLinesP
         vertical_candidates = self._find_vertical_bracket_candidates(binary_img)
         
         if self.debug:
-            print(f"Found {len(vertical_candidates)} vertical line candidates")
+            logger.info(f"Found {len(vertical_candidates)} vertical line candidates")
             if vertical_candidates:
-                print(f"Phase 1 - First candidate type: {type(vertical_candidates[0])}, value: {vertical_candidates[0]}")
+                logger.debug(f"Phase 1 - First candidate type: {type(vertical_candidates[0])}, value: {vertical_candidates[0]}")
         
         # Phase 2: Verify bracket corners using template matching (simplified for now)
         verified_brackets = self._verify_bracket_candidates(binary_img, vertical_candidates)
         
         if self.debug:
-            print(f"Verified {len(verified_brackets)} brackets after corner verification")
+            logger.debug(f"Verified {len(verified_brackets)} brackets after corner verification")
             if verified_brackets:
-                print(f"Phase 2 - First verified type: {type(verified_brackets[0])}, value: {verified_brackets[0]}")
+                logger.debug(f"Phase 2 - First verified type: {type(verified_brackets[0])}, value: {verified_brackets[0]}")
         
         # Phase 2.5: Cluster nearby brackets (merge thick brackets detected as multiple lines)
         clustered_brackets = self._cluster_brackets_by_proximity(verified_brackets)
         
         if self.debug:
-            print(f"Clustered to {len(clustered_brackets)} unique brackets after proximity grouping")
+            logger.debug(f"Clustered to {len(clustered_brackets)} unique brackets after proximity grouping")
         
         # Phase 3: Extract bracket information and map to staff systems
         bracket_info = self._extract_bracket_information(clustered_brackets)
@@ -2504,12 +2712,12 @@ class MeasureDetector:
                 self.bracket_candidates.append(candidate)
         
         if self.debug:
-            print(f"Stored bracket_candidates (raw coords) count: {len(self.bracket_candidates)}")
+            logger.debug(f"Stored bracket_candidates (raw coords) count: {len(self.bracket_candidates)}")
             if self.bracket_candidates:
-                print(f"First bracket_candidate: {self.bracket_candidates[0]}")
-            print(f"Final bracket detection results:")
+                logger.debug(f"First bracket_candidate: {self.bracket_candidates[0]}")
+            logger.debug(f"Final bracket detection results:")
             for i, bracket in enumerate(bracket_info):
-                print(f"  Bracket {i}: x={bracket['x']}, y_range=({bracket['y_start']}-{bracket['y_end']}), systems={bracket['covered_staff_system_indices']}")
+                logger.debug(f"  Bracket {i}: x={bracket['x']}, y_range=({bracket['y_start']}-{bracket['y_end']}), systems={bracket['covered_staff_system_indices']}")
         
         return bracket_info
     
@@ -2552,13 +2760,13 @@ class MeasureDetector:
             # Use half of the gap above
             y_start = current_top - int(gap_above * 0.5)
             if hasattr(self, 'debug') and self.debug:
-                print(f"    System {system_idx}: Gap above = {gap_above}px, using {int(gap_above * 0.5)}px")
+                logger.debug(f"    System {system_idx}: Gap above = {gap_above}px, using {int(gap_above * 0.5)}px")
         else:
             # Top system: extend upward by 100% of system height
             extension = int(current_height * 1.0)  # 100% of system height
             y_start = max(0, current_top - extension)
             if hasattr(self, 'debug') and self.debug:
-                print(f"    System {system_idx} (TOP): Extending upward by {extension}px")
+                logger.debug(f"    System {system_idx} (TOP): Extending upward by {extension}px")
         
         # Check below (next system) 
         if system_idx < len(all_systems) - 1:
@@ -2567,18 +2775,18 @@ class MeasureDetector:
             # Use half of the gap below
             y_end = current_bottom + int(gap_below * 0.5)
             if hasattr(self, 'debug') and self.debug:
-                print(f"    System {system_idx}: Gap below = {gap_below}px, using {int(gap_below * 0.5)}px")
+                logger.debug(f"    System {system_idx}: Gap below = {gap_below}px, using {int(gap_below * 0.5)}px")
         else:
             # Bottom system: extend downward by 100% of system height
             extension = int(current_height * 1.0)  # 100% of system height
             y_end = min(page_height, current_bottom + extension)
             if hasattr(self, 'debug') and self.debug:
-                print(f"    System {system_idx} (BOTTOM): Extending downward by {extension}px")
+                logger.debug(f"    System {system_idx} (BOTTOM): Extending downward by {extension}px")
         
         if hasattr(self, 'debug') and self.debug:
             old_margin = int(current_height * 0.3)
             old_y1, old_y2 = max(0, current_top - old_margin), min(page_height, current_bottom + old_margin)
-            print(f"    Y range optimization: {old_y1}-{old_y2} → {y_start}-{y_end} (height: {old_y2-old_y1} → {y_end-y_start})")
+            logger.debug(f"    Y range optimization: {old_y1}-{old_y2} → {y_start}-{y_end} (height: {old_y2-old_y1} → {y_end-y_start})")
         
         return int(y_start), int(y_end)
     
@@ -2601,7 +2809,7 @@ class MeasureDetector:
         
         if not all_staff_y:
             if self.debug:
-                print("Warning: No staff lines found for ROI calculation")
+                logger.debug("Warning: No staff lines found for ROI calculation")
             return []
         
         roi_x_end = int(width * 0.15)  # Left 15% of image
@@ -2612,8 +2820,8 @@ class MeasureDetector:
         roi = binary_img[roi_y_start:roi_y_end, 0:roi_x_end]
         
         if self.debug:
-            print(f"ROI for bracket detection: x=0-{roi_x_end}, y={roi_y_start}-{roi_y_end}")
-            print(f"ROI size: {roi.shape}")
+            logger.debug(f"ROI for bracket detection: x=0-{roi_x_end}, y={roi_y_start}-{roi_y_end}")
+            logger.debug(f"ROI size: {roi.shape}")
         
         # 1.2. Calculate dynamic parameters
         if not self.staff_systems:
@@ -2639,7 +2847,7 @@ class MeasureDetector:
             max_line_gap = 10  # Fallback value
         
         if self.debug:
-            print(f"HoughLinesP parameters: minLineLength={min_line_length}, maxLineGap={max_line_gap}")
+            logger.debug(f"HoughLinesP parameters: minLineLength={min_line_length}, maxLineGap={max_line_gap}")
         
         # 1.3. Apply HoughLinesP
         lines = cv2.HoughLinesP(
@@ -2711,7 +2919,7 @@ class MeasureDetector:
                 if self.debug:
                     print(f"  Verified bracket: ({x1}, {y1})-({x2}, {y2})")
             elif self.debug:
-                print(f"  Rejected candidate: ({x1}, {y1})-({x2}, {y2}) - missing horizontal elements")
+                logger.debug(f"  Rejected candidate: ({x1}, {y1})-({x2}, {y2}) - missing horizontal elements")
         
         return verified_brackets
     
@@ -2767,16 +2975,16 @@ class MeasureDetector:
             return []
         
         if self.debug:
-            print(f"  Clustering {len(verified_brackets)} bracket candidates")
-            print(f"  Logic: Similar X coordinates (50px) + continuous Y ranges (100px gap) = same bracket")
+            logger.debug(f"  Clustering {len(verified_brackets)} bracket candidates")
+            logger.debug(f"  Logic: Similar X coordinates (50px) + continuous Y ranges (100px gap) = same bracket")
         
         # Use simple X proximity clustering (ignoring Y gaps)
         clustered = self._cluster_brackets_by_x_proximity(verified_brackets, x_tolerance=50)
         
         if self.debug:
-            print(f"  Final bracket clustering: {len(clustered)} unique brackets")
+            logger.debug(f"  Final bracket clustering: {len(clustered)} unique brackets")
             for i, cluster in enumerate(clustered):
-                print(f"    Bracket {i}: x_avg={int((cluster[0] + cluster[2])/2)}, y_range=({cluster[1]}-{cluster[3]})")
+                logger.debug(f"    Bracket {i}: x_avg={int((cluster[0] + cluster[2])/2)}, y_range=({cluster[1]}-{cluster[3]})")
         
         return clustered
     
@@ -2812,13 +3020,13 @@ class MeasureDetector:
         x_groups.append(current_x_group)  # Don't forget last group
         
         if self.debug:
-            print(f"    Found {len(x_groups)} X-coordinate groups")
+            logger.debug(f"    Found {len(x_groups)} X-coordinate groups")
         
         # Now within each X group, cluster by Y continuity
         clustered = []
         for group_idx, x_group in enumerate(x_groups):
             if self.debug:
-                print(f"    Processing X-group {group_idx} with {len(x_group)} brackets")
+                logger.debug(f"    Processing X-group {group_idx} with {len(x_group)} brackets")
             
             # Sort by Y coordinate within the group
             y_sorted = sorted(x_group, key=lambda b: (b[1] + b[3]) / 2)
@@ -2882,7 +3090,7 @@ class MeasureDetector:
         is_continuous = y_gap <= y_gap_tolerance
         
         if self.debug:
-            print(f"        Y continuity check: cluster({cluster_y_start}-{cluster_y_end}) vs new({new_y_start}-{new_y_end}), gap={y_gap}, continuous={is_continuous}")
+            logger.debug(f"        Y continuity check: cluster({cluster_y_start}-{cluster_y_end}) vs new({new_y_start}-{new_y_end}), gap={y_gap}, continuous={is_continuous}")
         
         return is_continuous
     
@@ -3012,7 +3220,7 @@ def main():
     detector = MeasureDetector(debug=args.debug, config=config)
     
     if args.debug:
-        print(config.get_description())
+        logger.debug(config.get_description())
     
     try:
         # Check if input is PDF or image
@@ -3020,7 +3228,7 @@ def main():
         
         if file_ext == '.pdf':
             # Process PDF
-            print(f"Processing PDF: {args.input}, Page: {args.page}")
+            logger.debug(f"Processing PDF: {args.input}, Page: {args.page}")
             results = detector.detect_measures_from_pdf(args.input, args.page - 1, args.dpi)
             
             # Use the image from PDF for visualization
@@ -3034,9 +3242,9 @@ def main():
             # Load original image for visualization
             img = cv2.imread(args.input)
         
-        print(f"\nDetection Results:")
-        print(f"Number of measures: {results['measure_count']}")
-        print(f"Barline positions: {results['barlines']}")
+        logger.debug(f"\nDetection Results:")
+        logger.debug(f"Number of measures: {results['measure_count']}")
+        logger.debug(f"Barline positions: {results['barlines']}")
         
         # Create visualization
         if not args.output:
@@ -3049,7 +3257,7 @@ def main():
             output_path = args.output
             
         vis_img = detector.visualize_results(img, output_path)
-        print(f"\nVisualization saved to: {output_path}")
+        logger.debug(f"\nVisualization saved to: {output_path}")
         
         # Display result
         cv2.imshow("Measure Detection Result", cv2.resize(vis_img, None, fx=0.5, fy=0.5))
@@ -3057,7 +3265,7 @@ def main():
         cv2.destroyAllWindows()
         
     except Exception as e:
-        print(f"Error: {e}")
+        logger.debug(f"Error: {e}")
         import traceback
         traceback.print_exc()
         return 1
